@@ -3,7 +3,9 @@
 [Desktop Entry]
 Type=Application
 Name=DriveBeacon
+Name[es]=DriveBeacon
 Comment=System tray indicator for the abraunegg OneDrive client
+Comment[es]=Indicador de bandeja para el cliente OneDrive de abraunegg
 Exec=DriveBeacon
 Icon=folder-cloud
 Terminal=false

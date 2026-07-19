@@ -15,6 +15,39 @@ Kirigami.ApplicationWindow {
     visible: true
     title: i18n("DriveBeacon")
 
+    menuBar: Controls.MenuBar {
+        Controls.Menu {
+            title: i18n("Help")
+
+            Controls.MenuItem {
+                text: i18n("About DriveBeacon")
+                onTriggered: root.pageStack.push(aboutPageComponent)
+            }
+        }
+    }
+
+    Component {
+        id: aboutPageComponent
+
+        Kirigami.AboutPage {
+            aboutData: applicationAboutData
+
+            Controls.ToolButton {
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.margins: Kirigami.Units.smallSpacing
+                z: 1
+                display: Controls.AbstractButton.IconOnly
+                icon.name: "dialog-close"
+                text: i18n("Close About page")
+                onClicked: root.pageStack.pop()
+
+                Controls.ToolTip.visible: hovered
+                Controls.ToolTip.text: text
+            }
+        }
+    }
+
     onClosing: close => {
         close.accepted = false
         root.hide()

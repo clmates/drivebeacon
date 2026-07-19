@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<component type="desktop-application">
+  <id>io.github.clmates.drivebeacon</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+
+  <name>DriveBeacon</name>
+  <name xml:lang="es">DriveBeacon</name>
+  <summary>Monitor and control OneDrive synchronization from Plasma</summary>
+  <summary xml:lang="es">Supervisa y controla la sincronización de OneDrive desde Plasma</summary>
+
+  <description>
+    <p>
+      DriveBeacon is a system tray interface for the abraunegg OneDrive client.
+      It shows recent transfers and controls the existing systemd user service.
+    </p>
+    <p xml:lang="es">
+      DriveBeacon es una interfaz de bandeja para el cliente OneDrive de abraunegg.
+      Muestra las transferencias recientes y controla el servicio de usuario de systemd existente.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.clmates.drivebeacon.desktop</launchable>
+  <provides>
+    <binary>DriveBeacon</binary>
+  </provides>
+  <url type="homepage">https://github.com/clmates/drivebeacon</url>
+  <url type="bugtracker">https://github.com/clmates/drivebeacon/issues</url>
+  <developer id="github.com/clmates">
+    <name>DriveBeacon contributors</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+</component>

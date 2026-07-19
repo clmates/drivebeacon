@@ -1,0 +1,107 @@
+# Spanish translations for DriveBeacon.
+# SPDX-License-Identifier: GPL-3.0-only
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: drivebeacon 0.1.0\n"
+"PO-Revision-Date: 2026-07-19 00:00+0200\n"
+"Last-Translator: DriveBeacon contributors\n"
+"Language-Team: Spanish\n"
+"Language: es\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "DriveBeacon"
+msgstr "DriveBeacon"
+
+msgid "Monitor and control OneDrive synchronization"
+msgstr "Supervisa y controla la sincronización de OneDrive"
+
+msgid "Copyright 2026 DriveBeacon contributors"
+msgstr "Copyright 2026 Colaboradores de DriveBeacon"
+
+msgid "DriveBeacon is an independent open-source project. It is not affiliated with or endorsed by Microsoft Corporation or KDE e.V."
+msgstr "DriveBeacon es un proyecto independiente de código abierto. No está afiliado ni respaldado por Microsoft Corporation o KDE e.V."
+
+msgid "Development"
+msgstr "Desarrollo"
+
+msgid "Close About page"
+msgstr "Cerrar la página Acerca de"
+
+msgid "Show status"
+msgstr "Mostrar estado"
+
+msgid "Start synchronization"
+msgstr "Iniciar sincronización"
+
+msgid "Stop synchronization"
+msgstr "Detener sincronización"
+
+msgid "Restart synchronization"
+msgstr "Reiniciar sincronización"
+
+msgid "About DriveBeacon"
+msgstr "Acerca de DriveBeacon"
+
+msgid "Quit"
+msgstr "Salir"
+
+msgid "OneDrive is running"
+msgstr "OneDrive está en ejecución"
+
+msgid "OneDrive is starting"
+msgstr "OneDrive se está iniciando"
+
+msgid "OneDrive is stopping"
+msgstr "OneDrive se está deteniendo"
+
+msgid "OneDrive has failed"
+msgstr "OneDrive ha fallado"
+
+msgid "OneDrive is stopped"
+msgstr "OneDrive está detenido"
+
+msgid "OneDrive service was not found"
+msgstr "No se encontró el servicio de OneDrive"
+
+msgid "Checking OneDrive status"
+msgstr "Comprobando el estado de OneDrive"
+
+msgid "Cannot connect to the user D-Bus session."
+msgstr "No se puede conectar con la sesión D-Bus del usuario."
+
+msgid "Help"
+msgstr "Ayuda"
+
+msgid "Synchronization status"
+msgstr "Estado de la sincronización"
+
+msgid "Local folder: %1"
+msgstr "Carpeta local: %1"
+
+msgid "Stop"
+msgstr "Detener"
+
+msgid "Start"
+msgstr "Iniciar"
+
+msgid "Restart"
+msgstr "Reiniciar"
+
+msgid "Recent activity"
+msgstr "Actividad reciente"
+
+msgid "Clear"
+msgstr "Limpiar"
+
+msgid "No recent file transfers were found in the journal."
+msgstr "No se encontraron transferencias de archivos recientes en el registro."
+
+msgid "Downloaded"
+msgstr "Descargado"
+
+msgid "Uploaded"
+msgstr "Subido"

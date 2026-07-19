@@ -16,6 +16,7 @@ set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 
 include(CTest)
 include(FeatureSummary)
+include(ECMPoQmTools)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 include(KDEInstallDirs)
 include(KDECMakeSettings)
@@ -38,9 +39,12 @@ find_package(KF6 6.0 REQUIRED COMPONENTS
     I18n
     Kirigami
     StatusNotifierItem
+    XmlGui
 )
 
 add_subdirectory(src)
+
+ecm_install_po_files_as_qm(po)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)

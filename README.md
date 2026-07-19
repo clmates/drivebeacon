@@ -15,7 +15,7 @@ Microsoft Corporation. KDE and Plasma are trademarks of KDE e.V.
 ## Requirements
 
 - Qt 6 with QML, Quick, DBus, Widgets, and Qt Test
-- KDE Frameworks 6: Kirigami, CoreAddons, I18n, and StatusNotifierItem
+- KDE Frameworks 6: Kirigami, CoreAddons, I18n, StatusNotifierItem, and XmlGui
 - CMake, Extra CMake Modules, and Ninja
 - `onedrive.service` running as a systemd user service
 - `journalctl` access for the current user

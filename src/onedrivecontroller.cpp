@@ -4,6 +4,8 @@
 
 #include "activityparser.h"
 
+#include <KLocalizedString>
+
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
@@ -69,24 +71,24 @@ QString OneDriveController::subState() const
 QString OneDriveController::statusText() const
 {
     if (activeState() == QLatin1String("active")) {
-        return tr("OneDrive is running");
+        return i18n("OneDrive is running");
     }
     if (activeState() == QLatin1String("activating")) {
-        return tr("OneDrive is starting");
+        return i18n("OneDrive is starting");
     }
     if (activeState() == QLatin1String("deactivating")) {
-        return tr("OneDrive is stopping");
+        return i18n("OneDrive is stopping");
     }
     if (activeState() == QLatin1String("failed")) {
-        return tr("OneDrive has failed");
+        return i18n("OneDrive has failed");
     }
     if (activeState() == QLatin1String("inactive")) {
-        return tr("OneDrive is stopped");
+        return i18n("OneDrive is stopped");
     }
     if (activeState() == QLatin1String("not-found")) {
-        return tr("OneDrive service was not found");
+        return i18n("OneDrive service was not found");
     }
-    return tr("Checking OneDrive status");
+    return i18n("Checking OneDrive status");
 }
 
 QString OneDriveController::errorMessage() const
