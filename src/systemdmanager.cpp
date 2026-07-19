@@ -2,6 +2,8 @@
 
 #include "systemdmanager.h"
 
+#include <KLocalizedString>
+
 #include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusObjectPath>
@@ -47,7 +49,7 @@ void SystemdManager::refresh()
 {
     auto connection = QDBusConnection::sessionBus();
     if (!connection.isConnected()) {
-        setErrorMessage(tr("Cannot connect to the user D-Bus session."));
+        setErrorMessage(i18n("Cannot connect to the user D-Bus session."));
         return;
     }
 

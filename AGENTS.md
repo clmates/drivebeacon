@@ -16,7 +16,9 @@ Never perform a destructive action without the user's explicit prior authorizati
 
 ## Dependency Age Policy
 
-Never install a package or dependency version published less than 30 days ago. Verify the release date of the exact version before installation; if its age cannot be confirmed, do not install it until reliable release information is available. Prefer the newest compatible version that satisfies this minimum age, and record intentional version pins in the project's dependency configuration.
+Never install a third-party package or dependency version published less than 30 days ago. Verify the release date of the exact version before installation; if its age cannot be confirmed, do not install it until reliable release information is available. Prefer the newest compatible version that satisfies this minimum age, and record intentional version pins in the project's dependency configuration.
+
+Locally built DriveBeacon packages are exempt when they are produced directly from the current repository and installed only for development or packaging validation. This exception does not extend to bundled or transitive third-party dependencies, downloaded release artifacts, or packages built from unreviewed external changes.
 
 ## Build, Test, and Development Commands
 

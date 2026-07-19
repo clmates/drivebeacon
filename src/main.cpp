@@ -3,6 +3,7 @@
 #include "onedrivecontroller.h"
 
 #include <KAboutData>
+#include <KAboutApplicationDialog>
 #include <KLocalizedString>
 #include <KLocalizedQmlContext>
 #include <KStatusNotifierItem>
@@ -23,15 +24,25 @@ int main(int argc, char *argv[])
     KAboutData aboutData(
         QStringLiteral("drivebeacon"),
         i18n("DriveBeacon"),
-        QStringLiteral("0.1.0"),
+        QStringLiteral(DRIVEBEACON_VERSION),
         i18n("Monitor and control OneDrive synchronization"),
         KAboutLicense::GPL_V3);
+    aboutData.setDesktopFileName(QStringLiteral("io.github.clmates.drivebeacon"));
+    aboutData.setHomepage(QStringLiteral("https://github.com/clmates/drivebeacon"));
+    aboutData.setBugAddress("https://github.com/clmates/drivebeacon/issues");
+    aboutData.setCopyrightStatement(i18n("Copyright 2026 DriveBeacon contributors"));
+    aboutData.setOtherText(i18n(
+        "DriveBeacon is an independent open-source project. It is not affiliated "
+        "with or endorsed by Microsoft Corporation or KDE e.V."));
+    aboutData.addAuthor(QStringLiteral("clmates"), i18n("Development"));
     KAboutData::setApplicationData(aboutData);
 
     OneDriveController controller;
     QQmlApplicationEngine engine;
     KLocalization::setupLocalizedContext(&engine);
     engine.rootContext()->setContextProperty(QStringLiteral("controller"), &controller);
+    engine.rootContext()->setContextProperty(
+        QStringLiteral("applicationAboutData"), QVariant::fromValue(aboutData));
     engine.loadFromModule(QStringLiteral("io.github.clmates.drivebeacon"), QStringLiteral("Main"));
     if (engine.rootObjects().isEmpty()) {
         return 1;
@@ -48,6 +59,7 @@ int main(int argc, char *argv[])
     QAction startAction(i18n("Start synchronization"), &menu);
     QAction stopAction(i18n("Stop synchronization"), &menu);
     QAction restartAction(i18n("Restart synchronization"), &menu);
+    QAction aboutAction(i18n("About DriveBeacon"), &menu);
     QAction quitAction(i18n("Quit"), &menu);
     menu.addAction(&showAction);
     menu.addSeparator();
@@ -55,6 +67,7 @@ int main(int argc, char *argv[])
     menu.addAction(&stopAction);
     menu.addAction(&restartAction);
     menu.addSeparator();
+    menu.addAction(&aboutAction);
     menu.addAction(&quitAction);
     tray.setContextMenu(&menu);
 
@@ -75,6 +88,12 @@ int main(int argc, char *argv[])
                      &controller, &OneDriveController::stopService);
     QObject::connect(&restartAction, &QAction::triggered,
                      &controller, &OneDriveController::restartService);
+    KAboutApplicationDialog aboutDialog(aboutData);
+    QObject::connect(&aboutAction, &QAction::triggered, &aboutDialog, [&aboutDialog] {
+        aboutDialog.show();
+        aboutDialog.raise();
+        aboutDialog.activateWindow();
+    });
     QObject::connect(&quitAction, &QAction::triggered,
                      &application, &QApplication::quit);
 
