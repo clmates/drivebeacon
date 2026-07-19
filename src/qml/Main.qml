@@ -141,7 +141,7 @@ Kirigami.ApplicationWindow {
             Controls.Label {
                 Layout.fillWidth: true
                 visible: activityView.count === 0
-                text: i18n("No recent file transfers were found in the journal.")
+                text: i18n("No recent file activity was found in the journal.")
                 horizontalAlignment: Text.AlignHCenter
                 color: Kirigami.Theme.disabledTextColor
             }
@@ -162,12 +162,19 @@ Kirigami.ApplicationWindow {
                     required property date timestamp
                     required property string operation
                     required property string path
+                    required property string destinationPath
                     required property bool completed
 
                     width: ListView.view.width
-                    icon.name: operation === "download" ? "download" : "upload"
-                    text: path
-                    onClicked: controller.openActivityPath(path)
+                    icon.name: operation === "download" ? "download"
+                               : operation === "upload" ? "upload"
+                               : operation === "move" ? "go-jump"
+                               : "edit-delete"
+                    text: destinationPath.length > 0
+                          ? i18n("%1 → %2", path, destinationPath)
+                          : path
+                    onClicked: controller.openActivityPath(destinationPath.length > 0
+                                                           ? destinationPath : path)
 
                     contentItem: RowLayout {
                         Kirigami.Icon {
@@ -180,12 +187,18 @@ Kirigami.ApplicationWindow {
                             spacing: 0
                             Controls.Label {
                                 Layout.fillWidth: true
-                                text: activityDelegate.path
+                                text: activityDelegate.text
                                 elide: Text.ElideMiddle
                             }
                             Controls.Label {
                                 text: (activityDelegate.operation === "download"
-                                       ? i18n("Downloaded") : i18n("Uploaded"))
+                                       ? i18n("Downloaded")
+                                       : activityDelegate.operation === "upload"
+                                         ? i18n("Uploaded")
+                                         : activityDelegate.operation === "move"
+                                           ? i18n("Moved")
+                                           : activityDelegate.completed
+                                             ? i18n("Deleted") : i18n("Deleting"))
                                       + " · " + Qt.formatDateTime(activityDelegate.timestamp, Qt.DefaultLocaleShortDate)
                                 color: Kirigami.Theme.disabledTextColor
                                 font: Kirigami.Theme.smallFont

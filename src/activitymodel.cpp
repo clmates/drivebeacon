@@ -26,6 +26,8 @@ QVariant ActivityModel::data(const QModelIndex &index, int role) const
         return event.operation;
     case PathRole:
         return event.path;
+    case DestinationPathRole:
+        return event.destinationPath;
     case MessageRole:
         return event.message;
     case CompletedRole:
@@ -41,6 +43,7 @@ QHash<int, QByteArray> ActivityModel::roleNames() const
         {TimestampRole, "timestamp"},
         {OperationRole, "operation"},
         {PathRole, "path"},
+        {DestinationPathRole, "destinationPath"},
         {MessageRole, "message"},
         {CompletedRole, "completed"},
     };

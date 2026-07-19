@@ -2,7 +2,7 @@
 
 cmake_minimum_required(VERSION 3.20)
 
-project(drivebeacon VERSION 0.1.0 LANGUAGES CXX)
+project(drivebeacon VERSION 0.1.1 LANGUAGES CXX)
 
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share/applications")
 configure_file(
