@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-only
+
 add_executable(drivebeacon)
 set_target_properties(drivebeacon PROPERTIES OUTPUT_NAME DriveBeacon)
 

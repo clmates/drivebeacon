@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-only
+
 qt_add_executable(activityparser_test
     activityparser_test.cpp
     ../src/activityparser.cpp

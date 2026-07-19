@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-only
+
 cmake_minimum_required(VERSION 3.20)
 
 project(drivebeacon VERSION 0.1.0 LANGUAGES CXX)

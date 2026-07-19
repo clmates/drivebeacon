@@ -33,3 +33,8 @@ Closing the window leaves the tray application running. Use **Quit** in its tray
 menu to exit completely. The `run` target exposes the build-tree desktop metadata
 through `XDG_DATA_DIRS`, avoiding portal registration warnings without installing
 the application.
+
+## License
+
+DriveBeacon is licensed under the GNU General Public License version 3.0 only.
+See [LICENSE](LICENSE) for the complete terms.

@@ -39,6 +39,6 @@ Every behavior change should include a Qt Test where practical. Name test execut
 
 ## Commit & Pull Request Guidelines
 
-No readable Git history is available in the current scaffold, so use short, imperative commit subjects (for example, `Add storage client retries`). Keep commits focused and explain non-obvious tradeoffs in the body. Pull requests should summarize the change, explain how it was tested, and link relevant issues. Include screenshots for visible UI changes and call out configuration changes, migrations, or follow-up work.
+Use short, imperative commit subjects consistent with the existing history (for example, `Add storage client retries`). Keep commits focused and explain non-obvious tradeoffs in the body. Pull requests should summarize the change, explain how it was tested, and link relevant issues. Include screenshots for visible UI changes and call out configuration changes, migrations, or follow-up work.
 
 Never commit directly to the `prod` branch, even if the user explicitly authorizes or requests it. Before committing, verify the current branch. Commits are permitted only on `test` or on a dedicated branch for a specific feature, preferably named `feature/<short-description>`. Move changes to production exclusively through the repository's review and merge process.
