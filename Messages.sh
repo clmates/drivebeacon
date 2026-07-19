@@ -28,7 +28,7 @@ qml_sources=(
     --keyword=i18ncp:1c,2,3 \
     "${cpp_sources[@]}" \
     --package-name=drivebeacon \
-    --package-version=0.1.0 \
+    --package-version=0.1.1 \
     --output="${podir}/drivebeacon.pot"
 
 "${XGETTEXT}" --from-code=UTF-8 --language=JavaScript --join-existing \
@@ -38,5 +38,5 @@ qml_sources=(
     --keyword=i18ncp:1c,2,3 \
     "${qml_sources[@]}" \
     --package-name=drivebeacon \
-    --package-version=0.1.0 \
+    --package-version=0.1.1 \
     --output="${podir}/drivebeacon.pot"

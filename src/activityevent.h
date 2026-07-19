@@ -9,6 +9,7 @@ struct ActivityEvent {
     QDateTime timestamp;
     QString operation;
     QString path;
+    QString destinationPath;
     QString message;
     bool completed = false;
 };

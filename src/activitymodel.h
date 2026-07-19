@@ -16,6 +16,7 @@ public:
         TimestampRole = Qt::UserRole + 1,
         OperationRole,
         PathRole,
+        DestinationPathRole,
         MessageRole,
         CompletedRole,
     };

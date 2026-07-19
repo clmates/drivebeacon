@@ -2,8 +2,8 @@
 
 DriveBeacon is a system tray indicator for KDE Plasma that observes and controls
 the abraunegg `onedrive` user service. The first MVP provides a tray icon, service
-start/stop/restart actions, recent upload and download activity from the systemd
-journal, and navigation to affected local folders.
+start/stop/restart actions, recent upload, download, move, and deletion activity
+from the systemd journal, and navigation to affected local folders.
 
 The application delegates synchronization to the existing `onedrive` client. It
 does not access Microsoft Graph or modify OneDrive configuration.
