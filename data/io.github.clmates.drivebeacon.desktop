@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DriveBeacon
+Comment=System tray indicator for the abraunegg OneDrive client
+Exec=DriveBeacon
+Icon=folder-cloud
+Terminal=false
+Categories=Qt;KDE;Network;FileTransfer;
+StartupNotify=false

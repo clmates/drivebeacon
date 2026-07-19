@@ -1,0 +1,13 @@
+/build*/
+/.agents/
+/.codex/
+/.cache/
+/CMakeCache.txt
+/CMakeFiles/
+/CTestTestfile.cmake
+/Makefile
+/Testing/
+/cmake_install.cmake
+/.ninja_deps
+/.ninja_log
+compile_commands.json
