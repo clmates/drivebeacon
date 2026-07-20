@@ -8,6 +8,7 @@ import org.kde.kirigami as Kirigami
 Kirigami.ApplicationWindow {
     id: root
 
+    // The window is intentionally hideable: the tray icon keeps the application running.
     width: 760
     height: 520
     minimumWidth: 520
@@ -15,6 +16,7 @@ Kirigami.ApplicationWindow {
     visible: true
     title: i18n("DriveBeacon")
 
+    // The menu exposes the About page without adding another top-level window.
     menuBar: Controls.MenuBar {
         Controls.Menu {
             title: i18n("Help")
@@ -29,6 +31,7 @@ Kirigami.ApplicationWindow {
     Component {
         id: aboutPageComponent
 
+        // About data is prepared in C++ so branding and localization stay centralized.
         Kirigami.AboutPage {
             aboutData: applicationAboutData
 
@@ -48,6 +51,7 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    // Intercept the window manager close action and minimize the application to its tray item.
     onClosing: close => {
         close.accepted = false
         root.hide()
@@ -56,6 +60,7 @@ Kirigami.ApplicationWindow {
     pageStack.initialPage: Kirigami.Page {
         title: i18n("Synchronization status")
 
+        // The main page is organized into error, service status, and activity-history sections.
         ColumnLayout {
             anchors.fill: parent
             spacing: Kirigami.Units.largeSpacing
@@ -67,6 +72,7 @@ Kirigami.ApplicationWindow {
                 text: controller.errorMessage
                 showCloseButton: true
                 onVisibleChanged: {
+                    // Dismissing the banner also clears the controller's journal error.
                     if (!visible)
                         controller.clearError()
                 }
@@ -108,6 +114,7 @@ Kirigami.ApplicationWindow {
                                : "media-playback-start"
                     enabled: controller.activeState !== "activating"
                              && controller.activeState !== "deactivating"
+                    // The same button toggles between the only two stable user actions.
                     onClicked: controller.activeState === "active"
                                ? controller.stopService()
                                : controller.startService()
@@ -156,6 +163,7 @@ Kirigami.ApplicationWindow {
                 model: controller.activities
                 spacing: Kirigami.Units.smallSpacing
 
+                // Each delegate renders one normalized ActivityEvent from the C++ model.
                 delegate: Controls.ItemDelegate {
                     id: activityDelegate
 
@@ -173,6 +181,7 @@ Kirigami.ApplicationWindow {
                     text: destinationPath.length > 0
                           ? i18n("%1 → %2", path, destinationPath)
                           : path
+                    // Opening is delegated to C++ so path containment can be validated centrally.
                     onClicked: controller.openActivityPath(destinationPath.length > 0
                                                            ? destinationPath : path)
 

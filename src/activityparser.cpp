@@ -6,6 +6,8 @@
 
 std::optional<ActivityEvent> ActivityParser::parse(const QString &message, const QDateTime &timestamp)
 {
+    // OneDrive writes a completion suffix as a separate part of several messages.
+    // Remove it before matching while retaining the original message in the event.
     QString normalized = message.trimmed();
     bool completed = false;
 
@@ -15,6 +17,7 @@ std::optional<ActivityEvent> ActivityParser::parse(const QString &message, const
         completed = true;
     }
 
+    // Transfers can be reported as new, modified, or unspecified files.
     static const QRegularExpression transferExpression(
         QStringLiteral("^(Downloading|Uploading)(?: (?:new|modified))? file: (.+)$"));
     const auto transferMatch = transferExpression.match(normalized);
@@ -30,6 +33,7 @@ std::optional<ActivityEvent> ActivityParser::parse(const QString &message, const
         return event;
     }
 
+    // Moves are complete operations and therefore have no intermediate state here.
     static const QRegularExpression moveExpression(QStringLiteral("^Moving (.+) to (.+)$"));
     const auto moveMatch = moveExpression.match(normalized);
     if (moveMatch.hasMatch()) {
@@ -43,6 +47,7 @@ std::optional<ActivityEvent> ActivityParser::parse(const QString &message, const
         };
     }
 
+    // Local deletions are emitted after OneDrive has decided to remove the item.
     static const QRegularExpression localDeletionExpression(
         QStringLiteral("^Deleting local (?:file|directory): (.+)$"));
     const auto localDeletionMatch = localDeletionExpression.match(normalized);
@@ -57,6 +62,7 @@ std::optional<ActivityEvent> ActivityParser::parse(const QString &message, const
         };
     }
 
+    // The operating-system notification precedes the actual deletion, so it remains pending.
     static const QRegularExpression requestedDeletionExpression(QStringLiteral(
         "^The operating system sent a deletion notification\\. "
         "Trying to delete this item as requested: (.+)$"));

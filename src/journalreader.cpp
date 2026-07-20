@@ -9,6 +9,7 @@
 JournalReader::JournalReader(QObject *parent)
     : QObject(parent)
 {
+    // journalctl is kept as a child process; all output is converted into Qt signals.
     connect(&m_process, &QProcess::readyReadStandardOutput, this, &JournalReader::readOutput);
     connect(&m_process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
         Q_EMIT errorOccurred(m_process.errorString());
@@ -23,6 +24,7 @@ JournalReader::JournalReader(QObject *parent)
 
 JournalReader::~JournalReader()
 {
+    // Give journalctl a chance to exit cleanly, then force termination during shutdown.
     if (m_process.state() == QProcess::NotRunning) {
         return;
     }
@@ -39,6 +41,7 @@ void JournalReader::start()
         return;
     }
 
+    // JSON output preserves both the message and journald's microsecond timestamp.
     m_process.start(QStringLiteral("journalctl"), {
         QStringLiteral("--user-unit=onedrive.service"),
         QStringLiteral("--follow"),
@@ -50,6 +53,7 @@ void JournalReader::start()
 
 void JournalReader::readOutput()
 {
+    // QProcess may deliver partial records, so retain bytes until a newline arrives.
     m_buffer.append(m_process.readAllStandardOutput());
     qsizetype newline = -1;
     while ((newline = m_buffer.indexOf('\n')) >= 0) {
@@ -60,6 +64,7 @@ void JournalReader::readOutput()
 
 void JournalReader::processLine(const QByteArray &line)
 {
+    // Ignore malformed or unrelated records: the parser only needs MESSAGE-bearing entries.
     QJsonParseError parseError;
     const auto document = QJsonDocument::fromJson(line, &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {

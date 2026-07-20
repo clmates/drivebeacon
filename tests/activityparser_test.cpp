@@ -4,6 +4,7 @@
 
 #include <QTest>
 
+/** Regression tests for the journal-message normalization rules. */
 class ActivityParserTest final : public QObject
 {
     Q_OBJECT
@@ -19,6 +20,7 @@ private Q_SLOTS:
 
 void ActivityParserTest::parsesTransfer_data()
 {
+    // Data-driven cases cover operation direction, file qualifiers, and completion suffixes.
     QTest::addColumn<QString>("message");
     QTest::addColumn<QString>("operation");
     QTest::addColumn<QString>("path");
@@ -37,6 +39,7 @@ void ActivityParserTest::parsesTransfer_data()
 
 void ActivityParserTest::parsesDeletion_data()
 {
+    // Deletion fixtures distinguish a notification from a completed local deletion.
     QTest::addColumn<QString>("message");
     QTest::addColumn<QString>("path");
     QTest::addColumn<bool>("completed");
@@ -55,6 +58,7 @@ void ActivityParserTest::parsesDeletion_data()
 
 void ActivityParserTest::parsesDeletion()
 {
+    // All deletion forms share the same normalized operation and source-path contract.
     QFETCH(QString, message);
     QFETCH(QString, path);
     QFETCH(bool, completed);
@@ -69,6 +73,7 @@ void ActivityParserTest::parsesDeletion()
 
 void ActivityParserTest::parsesMove()
 {
+    // A move must preserve both endpoints and is always considered complete.
     const auto result = ActivityParser::parse(QStringLiteral(
         "Moving Documentos/Office Lens/21_6_23, 8_39 Microsoft Lens.pdf "
         "to Documentos/Trabajo/Confidencial/21_6_23, 8_39 Microsoft Lens.pdf"));
@@ -84,6 +89,7 @@ void ActivityParserTest::parsesMove()
 
 void ActivityParserTest::parsesTransfer()
 {
+    // Verify each transfer fixture against the normalized event fields.
     QFETCH(QString, message);
     QFETCH(QString, operation);
     QFETCH(QString, path);
@@ -98,6 +104,7 @@ void ActivityParserTest::parsesTransfer()
 
 void ActivityParserTest::ignoresUnrelatedMessages()
 {
+    // Messages outside the supported vocabulary must not create visible activity rows.
     QVERIFY(!ActivityParser::parse(QStringLiteral("Sync with OneDrive is complete")).has_value());
     QVERIFY(!ActivityParser::parse(QStringLiteral(
         "Trying to delete local file: Documentos/Trabajo/certificados/alta roi.pdf")).has_value());

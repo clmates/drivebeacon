@@ -13,6 +13,7 @@
 #include <QDBusVariant>
 
 namespace {
+// These names form the minimal session-D-Bus surface needed for one user service.
 constexpr auto serviceName = "org.freedesktop.systemd1";
 constexpr auto managerPath = "/org/freedesktop/systemd1";
 constexpr auto managerInterface = "org.freedesktop.systemd1.Manager";
@@ -24,6 +25,7 @@ constexpr auto unitName = "onedrive.service";
 SystemdManager::SystemdManager(QObject *parent)
     : QObject(parent)
 {
+    // Polling avoids depending on a separate PropertiesChanged subscription and keeps startup simple.
     m_refreshTimer.setInterval(3000);
     connect(&m_refreshTimer, &QTimer::timeout, this, &SystemdManager::refresh);
     m_refreshTimer.start();
@@ -47,6 +49,7 @@ QString SystemdManager::errorMessage() const
 
 void SystemdManager::refresh()
 {
+    // GetUnit also distinguishes a missing service from a temporarily unavailable D-Bus value.
     auto connection = QDBusConnection::sessionBus();
     if (!connection.isConnected()) {
         setErrorMessage(i18n("Cannot connect to the user D-Bus session."));
@@ -106,6 +109,7 @@ void SystemdManager::restartService()
 
 void SystemdManager::callManager(const QString &method)
 {
+    // Control calls are asynchronous so the UI event loop remains responsive.
     auto connection = QDBusConnection::sessionBus();
     QDBusInterface manager(QLatin1String(serviceName), QLatin1String(managerPath),
                            QLatin1String(managerInterface), connection);

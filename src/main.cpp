@@ -15,6 +15,7 @@
 #include <QQmlContext>
 #include <QQuickWindow>
 
+/** Creates the application, wires the QML window and exposes service controls in the tray. */
 int main(int argc, char *argv[])
 {
     QApplication application(argc, argv);
@@ -71,6 +72,7 @@ int main(int argc, char *argv[])
     menu.addAction(&quitAction);
     tray.setContextMenu(&menu);
 
+    // Closing the window hides it; the tray remains the long-lived entry point.
     const auto showWindow = [window] {
         if (!window) {
             return;
@@ -97,6 +99,7 @@ int main(int argc, char *argv[])
     QObject::connect(&quitAction, &QAction::triggered,
                      &application, &QApplication::quit);
 
+    // Keep tray actions and attention state synchronized with the backend properties.
     const auto updateTray = [&] {
         const bool running = controller.activeState() == QLatin1String("active");
         startAction.setEnabled(!running);

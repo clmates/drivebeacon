@@ -10,6 +10,8 @@ Update this guide when the project adopts a framework or a different layout.
 
 The source code is the primary source of truth. Keep Markdown documents at a high level: describe architecture, workflows, decisions, and user-facing behavior without duplicating implementation details. Prefer clear code, tests, types, and focused comments for low-level behavior. If documentation and code diverge, verify the code and update the document accordingly.
 
+Document code as part of every code change. Add concise comments or Doxygen documentation for new or modified classes, structs, enums, properties, signals, and functions, including private helpers when their purpose is not immediately obvious. Comments should explain responsibilities, data flow, invariants, security constraints, lifecycle decisions, and non-obvious tradeoffs; do not restate syntax or implementation line by line. Keep comments next to the declarations or logic they describe, update stale comments when behavior changes, and add structural comments in QML when they clarify the relationship between UI sections and backend properties.
+
 ## Destructive Action Safety
 
 Never perform a destructive action without the user's explicit prior authorization. Before requesting authorization, identify the exact targets and explain the concrete risks, affected data or services, expected impact, and whether recovery is possible. Approval must apply to the specific action described; do not treat general or earlier consent as authorization for a different destructive operation. Prefer reversible alternatives whenever available.

@@ -16,6 +16,7 @@ OneDriveController::OneDriveController(QObject *parent)
     : QObject(parent)
     , m_syncDirectory(QDir::home().filePath(QStringLiteral("OneDrive")))
 {
+    // The controller deliberately owns the backend helpers so QML sees one stable API.
     connect(&m_systemdManager, &SystemdManager::stateChanged,
             this, &OneDriveController::stateChanged);
     connect(&m_systemdManager, &SystemdManager::errorMessageChanged,
@@ -28,6 +29,7 @@ OneDriveController::OneDriveController(QObject *parent)
                     m_activities.prepend(std::move(*event));
                 }
             });
+    // `onedrive --display-config` is asynchronous because configuration lookup may start a process.
     connect(&m_configProcess, &QProcess::finished, this,
             [this](int, QProcess::ExitStatus) {
                 const QString output = QString::fromLocal8Bit(m_configProcess.readAllStandardOutput());
@@ -49,6 +51,7 @@ OneDriveController::OneDriveController(QObject *parent)
                 }
             });
 
+    // Start both one-shot configuration discovery and continuous journal monitoring at startup.
     loadConfiguration();
     m_journalReader.start();
 }
@@ -70,6 +73,7 @@ QString OneDriveController::subState() const
 
 QString OneDriveController::statusText() const
 {
+    // Keep state-to-text mapping centralized so the tray and QML use the same wording.
     if (activeState() == QLatin1String("active")) {
         return i18n("OneDrive is running");
     }
@@ -118,6 +122,7 @@ void OneDriveController::restartService()
 
 void OneDriveController::openActivityPath(const QString &relativePath) const
 {
+    // Resolve only inside sync_dir; journal paths are untrusted input for a desktop opener.
     const QString syncRoot = QDir::cleanPath(QFileInfo(m_syncDirectory).absoluteFilePath());
     const QString targetPath = QDir::cleanPath(QDir(syncRoot).filePath(relativePath));
     if (targetPath != syncRoot && !targetPath.startsWith(syncRoot + QDir::separator())) {
@@ -139,6 +144,7 @@ void OneDriveController::clearError()
 
 void OneDriveController::loadConfiguration()
 {
+    // The CLI is the authoritative source for the effective OneDrive sync directory.
     m_configProcess.start(QStringLiteral("onedrive"), {QStringLiteral("--display-config")});
 }
 

@@ -7,6 +7,7 @@ ActivityModel::ActivityModel(QObject *parent)
 {
 }
 
+// QML only asks for top-level rows; this model does not expose a tree.
 int ActivityModel::rowCount(const QModelIndex &parent) const
 {
     return parent.isValid() ? 0 : static_cast<int>(m_events.size());
