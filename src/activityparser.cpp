@@ -62,6 +62,35 @@ std::optional<ActivityEvent> ActivityParser::parse(const QString &message, const
         };
     }
 
+    // Remote deletions use separate start and success messages in the OneDrive journal.
+    static const QRegularExpression remoteDeletionExpression(QStringLiteral(
+        "^Deleting item from Microsoft OneDrive: (.+)$"));
+    const auto remoteDeletionMatch = remoteDeletionExpression.match(normalized);
+    if (remoteDeletionMatch.hasMatch()) {
+        return ActivityEvent{
+            timestamp,
+            QStringLiteral("delete"),
+            remoteDeletionMatch.captured(1),
+            {},
+            message,
+            false,
+        };
+    }
+
+    static const QRegularExpression completedRemoteDeletionExpression(QStringLiteral(
+        "^Successfully deleted item from Microsoft OneDrive: (.+)$"));
+    const auto completedRemoteDeletionMatch = completedRemoteDeletionExpression.match(normalized);
+    if (completedRemoteDeletionMatch.hasMatch()) {
+        return ActivityEvent{
+            timestamp,
+            QStringLiteral("delete"),
+            completedRemoteDeletionMatch.captured(1),
+            {},
+            message,
+            true,
+        };
+    }
+
     // The operating-system notification precedes the actual deletion, so it remains pending.
     static const QRegularExpression requestedDeletionExpression(QStringLiteral(
         "^The operating system sent a deletion notification\\. "

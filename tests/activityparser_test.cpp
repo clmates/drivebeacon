@@ -54,6 +54,12 @@ void ActivityParserTest::parsesDeletion_data()
     QTest::newRow("local-directory")
         << QStringLiteral("Deleting local directory: Documentos/Trabajo/certificados")
         << QStringLiteral("Documentos/Trabajo/certificados") << true;
+    QTest::newRow("remote-deletion")
+        << QStringLiteral("Deleting item from Microsoft OneDrive: Imagenes/Backup_Icloud/Whatsapp/photo.jpg")
+        << QStringLiteral("Imagenes/Backup_Icloud/Whatsapp/photo.jpg") << false;
+    QTest::newRow("remote-deletion-completed")
+        << QStringLiteral("Successfully deleted item from Microsoft OneDrive: Imagenes/Backup_Icloud/Whatsapp/photo.jpg")
+        << QStringLiteral("Imagenes/Backup_Icloud/Whatsapp/photo.jpg") << true;
 }
 
 void ActivityParserTest::parsesDeletion()
