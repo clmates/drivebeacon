@@ -2,7 +2,7 @@
 
 cmake_minimum_required(VERSION 3.20)
 
-project(drivebeacon VERSION 0.1.1 LANGUAGES CXX)
+project(drivebeacon VERSION 0.1.2 LANGUAGES CXX)
 
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share/applications")
 configure_file(
@@ -25,19 +25,12 @@ find_package(Qt6 6.7 REQUIRED COMPONENTS
     Core
     DBus
     Gui
-    Qml
-    Quick
-    QuickControls2
     Test
     Widgets
 )
-qt_policy(SET QTP0001 NEW)
-qt_policy(SET QTP0004 NEW)
-
 find_package(KF6 6.0 REQUIRED COMPONENTS
     CoreAddons
     I18n
-    Kirigami
     StatusNotifierItem
     XmlGui
 )

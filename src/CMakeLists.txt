@@ -18,27 +18,15 @@ target_sources(drivebeacon PRIVATE
     systemdmanager.h
 )
 
-set_source_files_properties(qml/Main.qml PROPERTIES QT_RESOURCE_ALIAS Main.qml)
-qt_add_qml_module(drivebeacon
-    URI io.github.clmates.drivebeacon
-    VERSION 1.0
-    QML_FILES qml/Main.qml
-)
-
 target_compile_features(drivebeacon PRIVATE cxx_std_20)
 target_compile_definitions(drivebeacon PRIVATE DRIVEBEACON_VERSION="${PROJECT_VERSION}")
 target_link_libraries(drivebeacon PRIVATE
     Qt6::Core
     Qt6::DBus
     Qt6::Gui
-    Qt6::Qml
-    Qt6::Quick
-    Qt6::QuickControls2
     Qt6::Widgets
     KF6::CoreAddons
     KF6::I18n
-    KF6::I18nQml
-    KF6::Kirigami
     KF6::StatusNotifierItem
     KF6::XmlGui
 )

@@ -5,17 +5,14 @@
 #include <KAboutData>
 #include <KAboutApplicationDialog>
 #include <KLocalizedString>
-#include <KLocalizedQmlContext>
 #include <KStatusNotifierItem>
 
 #include <QAction>
 #include <QApplication>
+#include <QDateTime>
 #include <QMenu>
-#include <QQmlApplicationEngine>
-#include <QQmlContext>
-#include <QQuickWindow>
 
-/** Creates the application, wires the QML window and exposes service controls in the tray. */
+/** Creates the application and exposes status and activity through a native tray menu. */
 int main(int argc, char *argv[])
 {
     QApplication application(argc, argv);
@@ -39,72 +36,126 @@ int main(int argc, char *argv[])
     KAboutData::setApplicationData(aboutData);
 
     OneDriveController controller;
-    QQmlApplicationEngine engine;
-    KLocalization::setupLocalizedContext(&engine);
-    engine.rootContext()->setContextProperty(QStringLiteral("controller"), &controller);
-    engine.rootContext()->setContextProperty(
-        QStringLiteral("applicationAboutData"), QVariant::fromValue(aboutData));
-    engine.loadFromModule(QStringLiteral("io.github.clmates.drivebeacon"), QStringLiteral("Main"));
-    if (engine.rootObjects().isEmpty()) {
-        return 1;
-    }
-
-    auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst());
     KStatusNotifierItem tray(QStringLiteral("drivebeacon"));
     tray.setCategory(KStatusNotifierItem::SystemServices);
     tray.setIconByName(QStringLiteral("folder-cloud"));
     tray.setTitle(i18n("DriveBeacon"));
 
-    QMenu menu;
-    QAction showAction(i18n("Show status"), &menu);
-    QAction startAction(i18n("Start synchronization"), &menu);
-    QAction stopAction(i18n("Stop synchronization"), &menu);
-    QAction restartAction(i18n("Restart synchronization"), &menu);
-    QAction aboutAction(i18n("About DriveBeacon"), &menu);
-    QAction quitAction(i18n("Quit"), &menu);
-    menu.addAction(&showAction);
-    menu.addSeparator();
-    menu.addAction(&startAction);
-    menu.addAction(&stopAction);
-    menu.addAction(&restartAction);
-    menu.addSeparator();
-    menu.addAction(&aboutAction);
-    menu.addAction(&quitAction);
-    tray.setContextMenu(&menu);
+    QAction *statusAction = new QAction(&application);
+    statusAction->setEnabled(false);
+    QAction *directoryAction = new QAction(&application);
+    directoryAction->setEnabled(false);
+    QAction *activityHeader = new QAction(i18n("Recent activity"), &application);
+    activityHeader->setEnabled(false);
+    QAction *emptyActivityAction = new QAction(
+        i18n("No recent file activity was found in the journal."), &application);
+    emptyActivityAction->setEnabled(false);
+    QAction *clearActivityAction = new QAction(i18n("Clear activity"), &application);
+    QAction *startAction = new QAction(i18n("Start synchronization"), &application);
+    QAction *stopAction = new QAction(i18n("Stop synchronization"), &application);
+    QAction *restartAction = new QAction(i18n("Restart synchronization"), &application);
+    QAction *aboutAction = new QAction(i18n("About DriveBeacon"), &application);
+    QAction *quitAction = new QAction(i18n("Quit"), &application);
 
-    // Closing the window hides it; the tray remains the long-lived entry point.
-    const auto showWindow = [window] {
-        if (!window) {
-            return;
-        }
-        window->show();
-        window->raise();
-        window->requestActivate();
+    auto *popupMenu = new QMenu;
+    popupMenu->addAction(statusAction);
+    popupMenu->addAction(directoryAction);
+    popupMenu->addSeparator();
+    popupMenu->addAction(activityHeader);
+    popupMenu->addAction(emptyActivityAction);
+    popupMenu->addAction(clearActivityAction);
+    popupMenu->addSeparator();
+
+    auto addServiceActions = [=](QMenu *menu) {
+        menu->addAction(startAction);
+        menu->addAction(stopAction);
+        menu->addAction(restartAction);
+        menu->addSeparator();
+        menu->addAction(aboutAction);
+        menu->addAction(quitAction);
     };
-    QObject::connect(&showAction, &QAction::triggered, &application, showWindow);
-    QObject::connect(&tray, &KStatusNotifierItem::activateRequested, &application,
-                     [showWindow](bool, const QPoint &) { showWindow(); });
-    QObject::connect(&startAction, &QAction::triggered,
+
+    addServiceActions(popupMenu);
+    // The tray host owns the popup surface and positions it next to the tray on Wayland.
+    tray.setContextMenu(popupMenu);
+    tray.setIsMenu(true);
+    QObject::connect(startAction, &QAction::triggered,
                      &controller, &OneDriveController::startService);
-    QObject::connect(&stopAction, &QAction::triggered,
+    QObject::connect(stopAction, &QAction::triggered,
                      &controller, &OneDriveController::stopService);
-    QObject::connect(&restartAction, &QAction::triggered,
+    QObject::connect(restartAction, &QAction::triggered,
                      &controller, &OneDriveController::restartService);
+    QObject::connect(clearActivityAction, &QAction::triggered,
+                     controller.activities(), &ActivityModel::clear);
+
+    QList<QAction *> activityActions;
+    for (int row = 0; row < 20; ++row) {
+        auto *action = new QAction(popupMenu);
+        action->setVisible(false);
+        QObject::connect(action, &QAction::triggered, &controller,
+                         [action, controller = &controller] {
+                             controller->openActivityPath(action->data().toString());
+                         });
+        popupMenu->insertAction(clearActivityAction, action);
+        activityActions.append(action);
+    }
+
+    const auto rebuildActivities = [&] {
+        const int count = controller.activities()->rowCount();
+        emptyActivityAction->setVisible(count == 0);
+        for (int row = 0; row < activityActions.size(); ++row) {
+            QAction *action = activityActions.at(row);
+            if (row >= count) {
+                action->setVisible(false);
+                continue;
+            }
+
+            const QModelIndex index = controller.activities()->index(row, 0);
+            const QString operation = index.data(ActivityModel::OperationRole).toString();
+            const QString path = index.data(ActivityModel::PathRole).toString();
+            const QString destination = index.data(ActivityModel::DestinationPathRole).toString();
+            const bool completed = index.data(ActivityModel::CompletedRole).toBool();
+            const QString activityPath = destination.isEmpty() ? path : destination;
+            const QString state = operation == QLatin1String("download")
+                ? i18n("Downloaded")
+                : operation == QLatin1String("upload")
+                    ? i18n("Uploaded")
+                    : operation == QLatin1String("move")
+                        ? i18n("Moved")
+                        : completed ? i18n("Deleted") : i18n("Deleting");
+            const QString label = destination.isEmpty()
+                ? QStringLiteral("%1 · %2").arg(path, state)
+                : QStringLiteral("%1 → %2 · %3").arg(path, destination, state);
+            action->setText(label);
+            action->setData(activityPath);
+            action->setVisible(true);
+        }
+    };
+    QObject::connect(controller.activities(), &QAbstractItemModel::rowsInserted,
+                     &application, rebuildActivities);
+    QObject::connect(controller.activities(), &QAbstractItemModel::rowsRemoved,
+                     &application, rebuildActivities);
+    QObject::connect(controller.activities(), &QAbstractItemModel::modelReset,
+                     &application, rebuildActivities);
+    rebuildActivities();
+
     KAboutApplicationDialog aboutDialog(aboutData);
-    QObject::connect(&aboutAction, &QAction::triggered, &aboutDialog, [&aboutDialog] {
+    QObject::connect(aboutAction, &QAction::triggered, &aboutDialog, [&aboutDialog] {
         aboutDialog.show();
         aboutDialog.raise();
         aboutDialog.activateWindow();
     });
-    QObject::connect(&quitAction, &QAction::triggered,
+    QObject::connect(quitAction, &QAction::triggered,
                      &application, &QApplication::quit);
 
     // Keep tray actions and attention state synchronized with the backend properties.
     const auto updateTray = [&] {
         const bool running = controller.activeState() == QLatin1String("active");
-        startAction.setEnabled(!running);
-        stopAction.setEnabled(running);
-        restartAction.setEnabled(running);
+        statusAction->setText(i18n("Status: %1", controller.statusText()));
+        directoryAction->setText(i18n("Local folder: %1", controller.syncDirectory()));
+        startAction->setEnabled(!running);
+        stopAction->setEnabled(running);
+        restartAction->setEnabled(running);
         tray.setStatus(controller.activeState() == QLatin1String("failed")
                            ? KStatusNotifierItem::NeedsAttention
                            : running ? KStatusNotifierItem::Active

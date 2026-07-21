@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Production C++ code lives in `src/`, with the Kirigami interface in `src/qml/`. Automated Qt Test cases live in `tests/`, and installable desktop metadata belongs in `data/`. Keep generated output in `build/`; never add generated MOC, QML cache, or binary files to the source tree. Mirror backend components in tests where practical, such as `src/activityparser.*` and `tests/activityparser_test.cpp`.
+Production C++ code lives in `src/`; the tray status and activity interface is a native Qt menu assembled in `src/main.cpp`. Automated Qt Test cases live in `tests/`, and installable desktop metadata belongs in `data/`. Keep generated output in `build/`; never add generated MOC, QML cache, or binary files to the source tree. Mirror backend components in tests where practical, such as `src/activityparser.*` and `tests/activityparser_test.cpp`.
 
 Update this guide when the project adopts a framework or a different layout.
 
