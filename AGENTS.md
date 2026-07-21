@@ -56,3 +56,14 @@ Prepare Arch User Repository metadata in the sibling repository
 `PKGBUILD` and `.SRCINFO` from that repository, but leave the push to its AUR
 remote to the user. Codex must not push the AUR repository. Keep packaging-only
 commits and files out of DriveBeacon's source history.
+
+For every released AUR update, follow this order:
+
+1. Bump the project version in `CMakeLists.txt`.
+2. Create an annotated release tag with the `vMAJOR.MINOR.PATCH` form on the release commit.
+3. Push the release commit and the `v`-prefixed tag to GitHub before preparing AUR metadata.
+4. Point `PKGBUILD` at the GitHub release tarball for that tag and replace `SKIP` with its verified SHA-256 checksum.
+5. Regenerate and validate `.SRCINFO` with `makepkg --printsrcinfo`.
+6. Commit the resulting `PKGBUILD` and `.SRCINFO` in `drivebeacon-aur`; the user performs the AUR push.
+
+Do not upload a Git-commit snapshot or leave `sha256sums=('SKIP')` for a normal release package; those are only temporary development fallbacks.
