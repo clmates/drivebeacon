@@ -53,5 +53,6 @@ Never commit directly to the `prod` branch, even if the user explicitly authoriz
 
 Prepare Arch User Repository metadata in the sibling repository
 `/home/clmates/programación/drivebeacon-aur`, not in this source repository. Commit
-and push `PKGBUILD` and `.SRCINFO` from that repository to its AUR remote. Keep
-packaging-only commits and files out of DriveBeacon's source history.
+`PKGBUILD` and `.SRCINFO` from that repository, but leave the push to its AUR
+remote to the user. Codex must not push the AUR repository. Keep packaging-only
+commits and files out of DriveBeacon's source history.
