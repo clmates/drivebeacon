@@ -48,3 +48,10 @@ Use short, imperative commit subjects consistent with the existing history (for 
 Release tags use the `vMAJOR.MINOR.PATCH` format (for example, `v0.1.1`) and must be annotated tags pointing at the release commit. Keep a matching bare version tag only when compatibility with an already-published release requires it; new releases should use the `v`-prefixed form consistently.
 
 Never commit directly to the `prod` branch, even if the user explicitly authorizes or requests it. Before committing, verify the current branch. Commits are permitted only on `test` or on a dedicated branch for a specific feature, preferably named `feature/<short-description>`. Move changes to production exclusively through the repository's review and merge process.
+
+## AUR Packaging
+
+Prepare Arch User Repository metadata in the sibling repository
+`/home/clmates/programación/drivebeacon-aur`, not in this source repository. Commit
+and push `PKGBUILD` and `.SRCINFO` from that repository to its AUR remote. Keep
+packaging-only commits and files out of DriveBeacon's source history.
