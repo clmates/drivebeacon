@@ -87,6 +87,16 @@ ctest --test-dir build --output-on-failure
 cmake --build build --target run
 ```
 
+The headless Graph service can also be inspected and controlled without the
+tray. It uses the active profile from the shared DriveBeacon configuration:
+
+```bash
+drivebeaconctl status
+drivebeaconctl sync
+drivebeaconctl refresh-folders
+drivebeaconctl service start|stop|restart
+```
+
 Closing the window leaves the tray application running. Use **Quit** in its tray
 menu to exit completely. The `run` target exposes the build-tree desktop metadata
 through `XDG_DATA_DIRS`, avoiding portal registration warnings without installing

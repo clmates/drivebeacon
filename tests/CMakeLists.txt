@@ -54,6 +54,8 @@ target_link_libraries(graphclient_state_test PRIVATE Qt6::Core Qt6::Network Qt6:
 
 add_test(NAME graphclient_state_test COMMAND graphclient_state_test)
 
+add_test(NAME drivebeaconctl_help COMMAND $<TARGET_FILE:drivebeaconctl> --help)
+
 find_program(DESKTOP_FILE_VALIDATE_EXECUTABLE desktop-file-validate)
 if(DESKTOP_FILE_VALIDATE_EXECUTABLE)
     add_test(NAME desktopfile_test

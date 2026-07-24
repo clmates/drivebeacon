@@ -97,10 +97,16 @@ target_link_libraries(drivebeacon-service PRIVATE
     systemd
 )
 
+add_executable(drivebeaconctl drivebeaconctl.cpp)
+target_compile_features(drivebeaconctl PRIVATE cxx_std_20)
+target_compile_definitions(drivebeaconctl PRIVATE DRIVEBEACON_VERSION="${PROJECT_VERSION}")
+target_link_libraries(drivebeaconctl PRIVATE Qt6::Core Qt6::DBus)
+
 ecm_create_qm_loader(drivebeacon drivebeacon)
 
 install(TARGETS drivebeacon ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
 install(TARGETS drivebeacon-service ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
+install(TARGETS drivebeaconctl ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
 configure_file(
     "${CMAKE_SOURCE_DIR}/data/drivebeacon-service.service.in"
     "${CMAKE_CURRENT_BINARY_DIR}/drivebeacon-service.service"
