@@ -36,6 +36,12 @@ struct SyncProfile {
     LocalAvailability availability = LocalAvailability::KeepLocal;
     /** Polling period for Graph delta requests, clamped to 10..3600 seconds. */
     int remoteCheckIntervalSeconds = 30;
+    /** Maximum simultaneous remote downloads for this profile. */
+    int concurrentDownloads = 2;
+    /** Maximum simultaneous local uploads for this profile. */
+    int concurrentUploads = 2;
+    /** Maximum simultaneous large transfers in either direction. */
+    int concurrentLargeTransfers = 1;
     /** Opaque Graph cursor resumed after restart; empty forces a baseline sync. */
     QString graphDeltaLink;
     /** Persisted `relativePath<TAB>sha256` local change baseline. */
@@ -46,6 +52,9 @@ struct SyncProfile {
     QStringList includedFolders;
     /** First-level remote folders explicitly excluded from synchronization. */
     QStringList excludedFolders;
+    /** Folder policy represented by the persisted remote/local baseline. */
+    QStringList graphSyncedIncludedFolders;
+    QStringList graphSyncedExcludedFolders;
 };
 
 /** Converts enum values to stable configuration strings. */

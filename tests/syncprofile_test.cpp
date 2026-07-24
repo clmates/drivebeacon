@@ -91,6 +91,13 @@ void SyncProfileTest::storesProfilesIndependently()
     graph.name = QStringLiteral("graph-test");
     graph.backend = SyncBackend::MicrosoftGraph;
     graph.localDirectory = QStringLiteral("/tmp/OneDrive-Graph-Test");
+    graph.concurrentDownloads = 4;
+    graph.concurrentUploads = 3;
+    graph.concurrentLargeTransfers = 2;
+    graph.graphDeltaLink = QStringLiteral("https://graph.example/delta");
+    graph.graphLocalSignatures = {QStringLiteral("a\tsha")};
+    graph.graphRemotePaths = {QStringLiteral("id\tDocumentos/a.txt\te")};
+    graph.graphSyncedIncludedFolders = {QStringLiteral("Documentos")};
     store.save(graph);
     store.setActiveProfileName(graph.name);
 
@@ -100,6 +107,15 @@ void SyncProfileTest::storesProfilesIndependently()
              SyncBackend::AbrauneggJournal);
     QCOMPARE(store.load().name, QStringLiteral("graph-test"));
     QCOMPARE(store.load().localDirectory, QStringLiteral("/tmp/OneDrive-Graph-Test"));
+    QCOMPARE(store.load().concurrentDownloads, 4);
+    QCOMPARE(store.load().concurrentUploads, 3);
+    QCOMPARE(store.load().concurrentLargeTransfers, 2);
+    QCOMPARE(store.load().graphDeltaLink, QStringLiteral("https://graph.example/delta"));
+    QCOMPARE(store.load().graphLocalSignatures, QStringList({QStringLiteral("a\tsha")}));
+    QCOMPARE(store.load().graphRemotePaths,
+             QStringList({QStringLiteral("id\tDocumentos/a.txt\te")}));
+    QCOMPARE(store.load().graphSyncedIncludedFolders,
+             QStringList({QStringLiteral("Documentos")}));
 }
 
 QTEST_MAIN(SyncProfileTest)

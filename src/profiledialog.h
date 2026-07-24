@@ -69,6 +69,9 @@ private:
     QTreeWidget *m_folderTree;
     QPushButton *m_refreshFoldersButton;
     QSpinBox *m_remoteIntervalSpin;
+    QSpinBox *m_concurrentDownloadsSpin;
+    QSpinBox *m_concurrentUploadsSpin;
+    QSpinBox *m_concurrentLargeTransfersSpin;
     QLineEdit *m_clientIdEdit;
     QLineEdit *m_driveIdEdit;
     QLabel *m_graphStatusLabel;

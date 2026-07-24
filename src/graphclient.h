@@ -5,13 +5,18 @@
 #include "storagequota.h"
 
 #include <QNetworkAccessManager>
+#include <QUrl>
+#include <QSaveFile>
 #include <QObject>
 #include <QQueue>
 #include <QHash>
 #include <QTimer>
 #include <QSet>
 
+#include <memory>
+
 class QNetworkReply;
+class QJsonObject;
 
 /** Remote folder queued while walking the initial tree enumeration. */
 struct GraphSyncFolder {
@@ -27,6 +32,8 @@ struct GraphSyncFile {
     QString id;
     /** Slash-separated path relative to the local synchronization root. */
     QString relativePath;
+    /** Remote size used to reserve the large-transfer concurrency slot. */
+    qint64 size = -1;
 };
 
 /** Local file waiting to be uploaded after the polling scan detects a change. */
@@ -88,9 +95,16 @@ public:
     void synchronize(const QString &driveId, const QString &accessToken,
                      const QString &localDirectory, const QStringList &includedFolders,
                      const QStringList &excludedFolders);
+    /** Re-enumerates selected folders while retaining the existing baseline. */
+    void refreshSelectedFolders(const QString &driveId, const QString &accessToken,
+                               const QString &localDirectory,
+                               const QStringList &includedFolders,
+                               const QStringList &excludedFolders);
     /** Starts delta-based remote change checks using the configured interval. */
     void startRemoteMonitoring(const QString &driveId, const QString &accessToken,
                                int intervalSeconds, const QString &deltaLink = {});
+    /** Applies per-profile transfer limits before synchronization starts. */
+    void configureTransferConcurrency(int downloads, int uploads, int largeTransfers);
     /** Restores local signatures and starts local change monitoring without a full scan. */
     void initializeLocalMonitoring(const QStringList &signatures,
                                    const QStringList &remotePaths,
@@ -121,19 +135,47 @@ Q_SIGNALS:
     void localStateChanged(const QStringList &signatures, const QStringList &remotePaths);
 
 private:
+    /** Per-download state retained across Graph redirect and content replies. */
+    struct DownloadTransfer;
+    /** Per-upload state retained across session creation and chunk replies. */
+    struct UploadTransfer;
+
     /** Sends one diagnostic to stdout, journald, and the tray activity model. */
     void log(const QString &message);
+    /** Sends a diagnostic to stdout and journald without creating a tray row. */
+    void logProgress(const QString &message);
     /** Continues the breadth-first remote folder enumeration. */
     void processNextFolder();
     /** Continues the queued remote file downloads. */
     void processNextFile();
+    /** Starts as many queued downloads as the concurrency budget allows. */
+    void startPendingDownloads();
+    /** Starts one independent streaming download transfer. */
+    void startDownload(const GraphSyncFile &file);
     /** Validates a content response and atomically writes the local file. */
-    void processDownloadedReply(QNetworkReply *reply, const GraphSyncFile &file,
-                                const QString &localPath);
+    void processDownloadedReply(QNetworkReply *reply,
+                                const std::shared_ptr<DownloadTransfer> &transfer);
+    /** Drains a network reply into the active atomic download file. */
+    void writeDownloadChunk(QNetworkReply *reply,
+                            const std::shared_ptr<DownloadTransfer> &transfer);
+    /** Reads the final content length as soon as download headers arrive. */
+    void updateDownloadMetadata(QNetworkReply *reply,
+                                const std::shared_ptr<DownloadTransfer> &transfer);
     /** Compares the filesystem with the persisted hash baseline. */
     void scanLocalChanges();
     /** Uploads the next local create or content update. */
     void uploadNextLocalFile();
+    /** Starts queued uploads while the upload concurrency budget has capacity. */
+    void startPendingUploads();
+    /** Starts one small direct upload or large upload-session transfer. */
+    void startUpload(const GraphLocalFile &file);
+    /** Creates a resumable Graph upload session for a large local file. */
+    void createUploadSession(const std::shared_ptr<UploadTransfer> &transfer);
+    /** Sends the next aligned byte range of the active upload session. */
+    void uploadNextChunk(const std::shared_ptr<UploadTransfer> &transfer);
+    /** Completes bookkeeping for a transfer and starts the next queued work. */
+    void finishUpload(const std::shared_ptr<UploadTransfer> &transfer,
+                      const QJsonObject &uploaded);
     /** Deletes the next remote item whose local counterpart was removed. */
     void deleteNextRemoteFile();
     /** Patches the name of the next remote item while preserving its ID. */
@@ -178,8 +220,14 @@ private:
     QString m_deltaDriveId;
     QString m_deltaToken;
     QString m_deltaLink;
-    /** Prevents overlapping mutations and recursive scans while a request runs. */
+    /** Cursor received for the current page, committed after its work succeeds. */
+    QString m_pendingDeltaLink;
+    /** Prevents advancing a delta cursor when any item in that page failed. */
+    bool m_deltaPageFailed = false;
+    /** Indicates that one or more uploads are active. */
     bool m_uploadInProgress = false;
+    /** True while the current local-change batch still has queued work. */
+    bool m_uploadBatchActive = false;
     bool m_deleteInProgress = false;
     bool m_renameInProgress = false;
     QSet<QString> m_pendingRemoteRenamePaths;
@@ -193,4 +241,11 @@ private:
     /** Progress counters for the currently active download batch. */
     int m_downloadedFiles = 0;
     int m_totalFiles = 0;
+    /** Independent transfers currently occupying download/upload slots. */
+    QHash<QString, std::shared_ptr<DownloadTransfer>> m_activeDownloads;
+    QHash<QString, std::shared_ptr<UploadTransfer>> m_activeUploads;
+    /** Initial conservative budgets; profile settings can expose these later. */
+    int m_maxConcurrentDownloads = 2;
+    int m_maxConcurrentUploads = 2;
+    int m_maxConcurrentLargeTransfers = 1;
 };

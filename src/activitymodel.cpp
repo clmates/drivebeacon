@@ -63,6 +63,33 @@ void ActivityModel::prepend(ActivityEvent event)
     }
 }
 
+void ActivityModel::updateGraphProgress(const QString &path, const QString &message,
+                                        bool completed)
+{
+    // Identify progress by operation and path so repeated updates replace one
+    // tray row instead of creating a new activity for every percentage.
+    const QDateTime timestamp = QDateTime::currentDateTimeUtc();
+    for (int row = 0; row < m_events.size(); ++row) {
+        ActivityEvent &event = m_events[row];
+        if (event.operation != QLatin1String("graph-progress") || event.path != path) {
+            continue;
+        }
+        event.timestamp = timestamp;
+        event.message = message;
+        event.completed = completed;
+        const QModelIndex index = this->index(row, 0);
+        Q_EMIT dataChanged(index, index);
+        if (row > 0) {
+            beginMoveRows({}, row, row, {}, 0);
+            m_events.move(row, 0);
+            endMoveRows();
+        }
+        return;
+    }
+
+    prepend({timestamp, QStringLiteral("graph-progress"), path, {}, message, completed});
+}
+
 void ActivityModel::clear()
 {
     if (m_events.isEmpty()) {

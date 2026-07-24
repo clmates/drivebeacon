@@ -39,6 +39,9 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     , m_folderTree(new QTreeWidget(this))
     , m_refreshFoldersButton(new QPushButton(i18n("Refresh folders"), this))
     , m_remoteIntervalSpin(new QSpinBox(this))
+    , m_concurrentDownloadsSpin(new QSpinBox(this))
+    , m_concurrentUploadsSpin(new QSpinBox(this))
+    , m_concurrentLargeTransfersSpin(new QSpinBox(this))
     , m_clientIdEdit(new QLineEdit(this))
     , m_driveIdEdit(new QLineEdit(this))
     , m_graphStatusLabel(new QLabel(this))
@@ -62,6 +65,9 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     m_folderTree->setMinimumHeight(150);
     m_remoteIntervalSpin->setRange(10, 3600);
     m_remoteIntervalSpin->setSuffix(i18n(" s"));
+    m_concurrentDownloadsSpin->setRange(1, 8);
+    m_concurrentUploadsSpin->setRange(1, 8);
+    m_concurrentLargeTransfersSpin->setRange(1, 4);
 
     auto *profileButtons = new QHBoxLayout;
     auto *newButton = new QPushButton(i18n("New"), this);
@@ -102,6 +108,9 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     form->addRow(i18n("Local directory:"), directoryRow);
     form->addRow(i18n("Availability:"), m_availabilityCombo);
     form->addRow(i18n("Remote check interval:"), m_remoteIntervalSpin);
+    form->addRow(i18n("Simultaneous downloads:"), m_concurrentDownloadsSpin);
+    form->addRow(i18n("Simultaneous uploads:"), m_concurrentUploadsSpin);
+    form->addRow(i18n("Simultaneous large transfers:"), m_concurrentLargeTransfersSpin);
     auto *folderBox = new QVBoxLayout;
     folderBox->addWidget(new QLabel(i18n("Select first-level remote folders to synchronize or exclude:"), this));
     folderBox->addWidget(m_folderTree);
@@ -200,6 +209,9 @@ void ProfileDialog::loadProfile(const QString &name)
     m_availabilityCombo->setCurrentIndex(
         m_availabilityCombo->findData(localAvailabilityName(profile.availability)));
     m_remoteIntervalSpin->setValue(profile.remoteCheckIntervalSeconds);
+    m_concurrentDownloadsSpin->setValue(profile.concurrentDownloads);
+    m_concurrentUploadsSpin->setValue(profile.concurrentUploads);
+    m_concurrentLargeTransfersSpin->setValue(profile.concurrentLargeTransfers);
     m_clientIdEdit->setText(profile.graphClientId);
     m_driveIdEdit->setText(profile.remoteDriveId);
     updateGraphStatus();
@@ -213,6 +225,9 @@ void ProfileDialog::createProfile()
     m_directoryEdit->setText(QDir::home().filePath(QStringLiteral("OneDrive-Graph-Test")));
     m_availabilityCombo->setCurrentIndex(
         m_availabilityCombo->findData(QStringLiteral("keep-local")));
+    m_concurrentDownloadsSpin->setValue(2);
+    m_concurrentUploadsSpin->setValue(2);
+    m_concurrentLargeTransfersSpin->setValue(1);
     m_folderTree->clear();
     m_clientIdEdit->clear();
     m_driveIdEdit->clear();
@@ -229,7 +244,10 @@ void ProfileDialog::saveProfile()
         return;
     }
 
-    SyncProfile profile;
+    // Update the existing profile instead of rebuilding it. In particular,
+    // keep Graph's delta cursor and both baselines when only UI settings
+    // (limits or folder policy) change.
+    SyncProfile profile = m_store->load(name);
     profile.name = name;
     profile.backend = syncBackendFromName(m_backendCombo->currentData().toString());
     profile.localDirectory = QDir::cleanPath(
@@ -237,6 +255,9 @@ void ProfileDialog::saveProfile()
     profile.availability = localAvailabilityFromName(
         m_availabilityCombo->currentData().toString());
     profile.remoteCheckIntervalSeconds = m_remoteIntervalSpin->value();
+    profile.concurrentDownloads = m_concurrentDownloadsSpin->value();
+    profile.concurrentUploads = m_concurrentUploadsSpin->value();
+    profile.concurrentLargeTransfers = m_concurrentLargeTransfersSpin->value();
     for (int row = 0; row < m_folderTree->topLevelItemCount(); ++row) {
         QTreeWidgetItem *item = m_folderTree->topLevelItem(row);
         if (item->checkState(1) == Qt::Checked) {

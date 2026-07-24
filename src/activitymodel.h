@@ -40,6 +40,8 @@ public:
 
     /** Inserts an event at the front and removes entries beyond the history limit. */
     void prepend(ActivityEvent event);
+    /** Updates one in-flight Graph transfer and keeps it at the front of history. */
+    void updateGraphProgress(const QString &path, const QString &message, bool completed);
     /** Removes all activity rows. */
     Q_INVOKABLE void clear();
 

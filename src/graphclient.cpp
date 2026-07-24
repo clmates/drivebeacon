@@ -14,6 +14,7 @@
 #include <QDateTime>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QSaveFile>
 #include <QScopeGuard>
 #include <QUrl>
 #include <QSet>
@@ -22,6 +23,11 @@
 #include <algorithm>
 
 namespace {
+/** Files above this size use resumable sessions; smaller files use one PUT. */
+constexpr qint64 largeUploadThreshold = 10 * 1024 * 1024;
+/** 10 MiB is aligned to Graph's required 320 KiB upload range multiple. */
+constexpr qint64 uploadChunkSize = 10 * 1024 * 1024;
+
 /** Adds a UTC timestamp and publishes the same message to stderr/journald. */
 void graphLog(const QString &message)
 {
@@ -89,6 +95,38 @@ QString localFileSignature(const QString &path)
 }
 }
 
+struct GraphClient::DownloadTransfer {
+    /** Per-file state kept alive by the network reply callbacks. */
+    GraphSyncFile file;
+    /** Final local destination; the temporary QSaveFile lives beside it. */
+    QString localPath;
+    /** Atomic output prevents an interrupted download becoming a baseline file. */
+    std::unique_ptr<QSaveFile> output;
+    /** Set when a disk write fails; the delta cursor must then remain unchanged. */
+    bool writeFailed = false;
+    /** Bytes committed to the temporary file for progress and diagnostics. */
+    qint64 bytes = 0;
+    /** Content-Length from Graph or the signed download URL, when available. */
+    qint64 totalBytes = -1;
+    /** Last percentage sent to the UI; updates are throttled to five points. */
+    int lastProgress = -1;
+    /** Fallback byte threshold used when the server omits Content-Length. */
+    qint64 lastLogBytes = 0;
+};
+
+struct GraphClient::UploadTransfer {
+    /** Per-file state shared by a simple PUT or every upload-session chunk. */
+    GraphLocalFile file;
+    /** Pre-authenticated Graph upload-session endpoint for large files. */
+    QUrl uploadUrl;
+    /** Snapshot size used to build Content-Range and progress information. */
+    qint64 size = 0;
+    /** Offset of the next byte requested by Graph. */
+    qint64 offset = 0;
+    /** Last percentage reported for this upload. */
+    int lastProgress = -1;
+};
+
 GraphClient::GraphClient(QObject *parent)
     : QObject(parent)
     , m_network(this)
@@ -98,14 +136,28 @@ GraphClient::GraphClient(QObject *parent)
     m_uploadTimer.setInterval(10000);
     connect(&m_uploadTimer, &QTimer::timeout, this, &GraphClient::scanLocalChanges);
     connect(&m_remoteTimer, &QTimer::timeout, this, [this] {
+        // Do not advance the cursor while a transfer is still being applied.
+        // Otherwise a restart could resume after an unfinished large download.
+        if (!m_activeDownloads.isEmpty() || !m_activeUploads.isEmpty()
+            || m_deleteInProgress
+            || m_renameInProgress) {
+            return;
+        }
         // Delta is a persisted pull cursor, not a complete listing. A page can
         // contain both a tombstone and the live item for a rename, and the same
         // item may be repeated; the sets below make each identity idempotent.
         log(QStringLiteral("Graph sync: checking remote delta"));
-        const QUrl url = m_deltaLink.isEmpty()
+        QUrl url = m_deltaLink.isEmpty()
             ? QUrl(QStringLiteral("https://graph.microsoft.com/v1.0/drives/%1/root/delta?token=latest")
                        .arg(QString::fromUtf8(QUrl::toPercentEncoding(m_deltaDriveId))))
             : QUrl(m_deltaLink);
+        if (m_deltaLink.isEmpty()) {
+            // The first delta page must carry parentReference and size so
+            // nested files can be routed and scheduled correctly after a
+            // restart; subsequent opaque links must remain untouched.
+            url.setQuery(url.query(QUrl::FullyEncoded)
+                         + QStringLiteral("&$select=id,name,file,deleted,parentReference,eTag,size"));
+        }
         auto *reply = m_network.get(graphRequest(url, m_deltaToken.toUtf8()));
         connect(reply, &QNetworkReply::finished, this, [this, reply] {
             const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
@@ -123,12 +175,11 @@ GraphClient::GraphClient(QObject *parent)
             const QString nextLink = object.value(QStringLiteral("@odata.nextLink")).toString();
             const QString deltaLink = object.value(QStringLiteral("@odata.deltaLink")).toString();
             if (!deltaLink.isEmpty()) {
-                m_deltaLink = deltaLink;
-                Q_EMIT deltaLinkChanged(deltaLink);
+                m_pendingDeltaLink = deltaLink;
             } else if (!nextLink.isEmpty()) {
-                m_deltaLink = nextLink;
-                return;
+                m_pendingDeltaLink = nextLink;
             }
+            m_deltaPageFailed = false;
             const QJsonArray deltaValues = object.value(QStringLiteral("value")).toArray();
             QSet<QString> activeDeltaIds;
             for (const QJsonValue &value : deltaValues) {
@@ -190,7 +241,47 @@ GraphClient::GraphClient(QObject *parent)
                 }
                 const QString parentId = item.value(QStringLiteral("parentReference")).toObject()
                                              .value(QStringLiteral("id")).toString();
-                const QString parentPath = m_remotePathsById.value(parentId);
+                QString parentPath = m_remotePathsById.value(parentId);
+                if (parentPath.isEmpty() && !parentId.isEmpty()) {
+                    // The folder index is path keyed, so use it as a second
+                    // in-memory identity source before parsing Graph's path.
+                    for (auto folderIt = m_remoteFolderIds.cbegin();
+                         folderIt != m_remoteFolderIds.cend(); ++folderIt) {
+                        if (folderIt.value() == parentId) {
+                            parentPath = folderIt.key();
+                            break;
+                        }
+                    }
+                }
+                if (parentPath.isEmpty()) {
+                    // Delta responses can omit a folder identity that was not
+                    // present in the persisted baseline. Graph still provides
+                    // parentReference.path, which preserves the real folder.
+                    const QString graphParentPath = item.value(QStringLiteral("parentReference"))
+                                                       .toObject()
+                                                       .value(QStringLiteral("path"))
+                                                       .toString();
+                    const int rootMarker = graphParentPath.indexOf(QStringLiteral("root:"));
+                    if (rootMarker >= 0) {
+                        parentPath = graphParentPath.sliced(rootMarker + 5);
+                        while (parentPath.startsWith(QLatin1Char('/'))) {
+                            parentPath.remove(0, 1);
+                        }
+                        while (parentPath.endsWith(QLatin1Char('/'))) {
+                            parentPath.chop(1);
+                        }
+                    } else if (!graphParentPath.isEmpty()) {
+                        // Some Graph responses omit the `root:` marker but
+                        // still return a usable slash-separated parent path.
+                        parentPath = graphParentPath;
+                        while (parentPath.startsWith(QLatin1Char('/'))) {
+                            parentPath.remove(0, 1);
+                        }
+                        while (parentPath.endsWith(QLatin1Char('/'))) {
+                            parentPath.chop(1);
+                        }
+                    }
+                }
                 const QString name = item.value(QStringLiteral("name")).toString();
                 if (name.isEmpty() || (parentId.isEmpty() && oldPath.isEmpty())) {
                     structureChanged = true;
@@ -199,6 +290,10 @@ GraphClient::GraphClient(QObject *parent)
                 const QString relativePath = oldPath.isEmpty()
                     ? (parentPath.isEmpty() ? name : parentPath + QLatin1Char('/') + name)
                     : oldPath;
+                if (oldPath.isEmpty() && parentPath.isEmpty() && !parentId.isEmpty()) {
+                    log(QStringLiteral("Graph sync: delta item %1 has no resolvable parent path")
+                            .arg(itemId));
+                }
                 const QString effectiveParentPath = parentPath.isEmpty() && !oldPath.isEmpty()
                     ? QFileInfo(oldPath).path() : parentPath;
                 const QString renamedPath = effectiveParentPath.isEmpty()
@@ -251,7 +346,8 @@ GraphClient::GraphClient(QObject *parent)
                 m_remoteItemIds.insert(relativePath, itemId);
                 m_remoteEtags.insert(itemId, eTag);
                 if (isIncluded(relativePath)) {
-                    m_pendingFiles.enqueue({itemId, relativePath});
+                    m_pendingFiles.enqueue({itemId, relativePath,
+                                            item.value(QStringLiteral("size")).toVariant().toLongLong()});
                 }
                 handledDeltaIds.insert(itemId);
             }
@@ -265,6 +361,12 @@ GraphClient::GraphClient(QObject *parent)
                 m_totalFiles = m_pendingFiles.size();
                 m_downloadedFiles = 0;
                 processNextFile();
+            } else if (!m_pendingDeltaLink.isEmpty()) {
+                // An empty page is still a successful page: advance its
+                // cursor so the same delta is not replayed on every poll.
+                m_deltaLink = m_pendingDeltaLink;
+                Q_EMIT deltaLinkChanged(m_pendingDeltaLink);
+                m_pendingDeltaLink.clear();
             }
         });
     });
@@ -274,6 +376,13 @@ void GraphClient::log(const QString &message)
 {
     graphLog(message);
     Q_EMIT logMessage(message);
+}
+
+void GraphClient::logProgress(const QString &message)
+{
+    // Transfer progress is represented by one mutable ActivityModel row; it
+    // remains fully visible in journald without creating a row per percentage.
+    graphLog(message);
 }
 
 void GraphClient::startRemoteMonitoring(const QString &driveId, const QString &accessToken,
@@ -289,6 +398,19 @@ void GraphClient::startRemoteMonitoring(const QString &driveId, const QString &a
     m_deltaLink = deltaLink;
     m_remoteTimer.setInterval(qBound(10, intervalSeconds, 3600) * 1000);
     m_remoteTimer.start();
+}
+
+void GraphClient::configureTransferConcurrency(int downloads, int uploads, int largeTransfers)
+{
+    // Keep limits conservative even if an old or manually edited profile has
+    // invalid values; each direction has independent general and large slots.
+    m_maxConcurrentDownloads = qBound(1, downloads, 8);
+    m_maxConcurrentUploads = qBound(1, uploads, 8);
+    m_maxConcurrentLargeTransfers = qBound(1, largeTransfers, 4);
+    logProgress(QStringLiteral("Graph sync: transfer limits downloads=%1 uploads=%2 large=%3")
+                    .arg(m_maxConcurrentDownloads)
+                    .arg(m_maxConcurrentUploads)
+                    .arg(m_maxConcurrentLargeTransfers));
 }
 
 void GraphClient::initializeLocalMonitoring(const QStringList &signatures,
@@ -436,7 +558,8 @@ void GraphClient::fetchRootFolders(const QString &driveId, const QString &access
     const QUrl url(QStringLiteral("https://graph.microsoft.com/v1.0/drives/%1/root/children")
                       .arg(QString::fromUtf8(QUrl::toPercentEncoding(driveId))));
     QNetworkRequest request = graphRequest(url, accessToken.toUtf8());
-    request.setUrl(QUrl(url.toString() + QStringLiteral("?$select=id,name,folder,deleted,eTag,parentReference")));
+    request.setUrl(QUrl(url.toString() + QStringLiteral(
+        "?$select=id,name,folder,deleted,eTag,parentReference,size")));
     auto *reply = m_network.get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
         const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
@@ -502,6 +625,38 @@ void GraphClient::synchronize(const QString &driveId, const QString &accessToken
     processNextFolder();
 }
 
+void GraphClient::refreshSelectedFolders(const QString &driveId, const QString &accessToken,
+                                         const QString &localDirectory,
+                                         const QStringList &includedFolders,
+                                         const QStringList &excludedFolders)
+{
+    if (driveId.isEmpty() || accessToken.isEmpty() || localDirectory.isEmpty()) {
+        Q_EMIT errorOccurred(QStringLiteral("A drive, access token, and local directory are required."));
+        return;
+    }
+    // Folder-policy changes reuse the persisted hashes, IDs, eTags, and delta
+    // cursor. Enumeration is only a discovery pass for newly selected data.
+    m_syncDriveId = driveId;
+    m_syncToken = accessToken;
+    m_syncDirectory = QDir::cleanPath(QFileInfo(localDirectory).absoluteFilePath());
+    m_includedFolders = includedFolders;
+    m_excludedFolders = excludedFolders;
+    m_pendingFolders.clear();
+    m_pendingFiles.clear();
+    m_downloadedFiles = 0;
+    m_totalFiles = 0;
+    if (!QDir().mkpath(m_syncDirectory)) {
+        Q_EMIT errorOccurred(QStringLiteral("The local synchronization directory could not be created."));
+        return;
+    }
+    m_pendingFolders.enqueue({QStringLiteral("root"), {}});
+    m_remoteFolderIds.insert({}, QStringLiteral("root"));
+    m_remotePathsById.insert(QStringLiteral("root"), {});
+    log(QStringLiteral("Graph sync: refreshing selected folders without resetting the baseline"));
+    Q_EMIT syncProgress(0, {});
+    processNextFolder();
+}
+
 void GraphClient::processNextFolder()
 {
     if (m_pendingFolders.isEmpty()) {
@@ -518,7 +673,8 @@ void GraphClient::processNextFolder()
                    .arg(QString::fromUtf8(QUrl::toPercentEncoding(m_syncDriveId)),
                         QString::fromUtf8(QUrl::toPercentEncoding(folder.id))));
     QNetworkRequest request = graphRequest(url, m_syncToken.toUtf8());
-    request.setUrl(QUrl(url.toString() + QStringLiteral("?$select=id,name,folder,file,deleted,eTag,parentReference")));
+    request.setUrl(QUrl(url.toString() + QStringLiteral(
+        "?$select=id,name,folder,file,deleted,eTag,parentReference,size")));
     const QString displayPath = folder.relativePath.isEmpty()
         ? QStringLiteral("/") : folder.relativePath;
     log(QStringLiteral("Graph sync: listing %1").arg(displayPath));
@@ -575,11 +731,18 @@ void GraphClient::processNextFolder()
                 }
             } else if (item.contains(QStringLiteral("file"))) {
                 ++filesFound;
-                m_remotePathsById.insert(item.value(QStringLiteral("id")).toString(), relativePath);
-                m_remoteEtags.insert(item.value(QStringLiteral("id")).toString(),
-                                     item.value(QStringLiteral("eTag")).toString());
-                m_remoteItemIds.insert(relativePath, item.value(QStringLiteral("id")).toString());
-                m_pendingFiles.enqueue({item.value(QStringLiteral("id")).toString(), relativePath});
+                const QString itemId = item.value(QStringLiteral("id")).toString();
+                const QString eTag = item.value(QStringLiteral("eTag")).toString();
+                const bool alreadyCurrent = m_remoteItemIds.value(relativePath) == itemId
+                    && m_remoteEtags.value(itemId) == eTag
+                    && QFileInfo(safeLocalPath(relativePath)).exists();
+                m_remotePathsById.insert(itemId, relativePath);
+                m_remoteEtags.insert(itemId, eTag);
+                m_remoteItemIds.insert(relativePath, itemId);
+                if (!alreadyCurrent) {
+                    m_pendingFiles.enqueue({itemId, relativePath,
+                                            item.value(QStringLiteral("size")).toVariant().toLongLong()});
+                }
             }
         }
         log(QStringLiteral("Graph sync: %1 contained %2 folders and %3 files")
@@ -631,8 +794,19 @@ void GraphClient::processNextFolder()
                             }
                         }
                     } else if (item.contains(QStringLiteral("file")) && isIncluded(relativePath)) {
-                        m_remoteItemIds.insert(relativePath, item.value(QStringLiteral("id")).toString());
-                        m_pendingFiles.enqueue({item.value(QStringLiteral("id")).toString(), relativePath});
+                        const QString itemId = item.value(QStringLiteral("id")).toString();
+                        const QString eTag = item.value(QStringLiteral("eTag")).toString();
+                        const bool alreadyCurrent = m_remoteItemIds.value(relativePath) == itemId
+                            && m_remoteEtags.value(itemId) == eTag
+                            && QFileInfo(safeLocalPath(relativePath)).exists();
+                        m_remotePathsById.insert(itemId, relativePath);
+                        m_remoteEtags.insert(itemId, eTag);
+                        m_remoteItemIds.insert(relativePath, itemId);
+                        if (!alreadyCurrent) {
+                            m_pendingFiles.enqueue({itemId, relativePath,
+                                                    item.value(QStringLiteral("size"))
+                                                        .toVariant().toLongLong()});
+                        }
                     }
                 }
                 processNextFolder();
@@ -645,7 +819,18 @@ void GraphClient::processNextFolder()
 
 void GraphClient::processNextFile()
 {
-    if (m_pendingFiles.isEmpty()) {
+    // Transfer callbacks re-enter this scheduler. The delta cursor is
+    // persisted only after every file in the page is durable on disk.
+    startPendingDownloads();
+    if (m_pendingFiles.isEmpty() && m_activeDownloads.isEmpty()) {
+        if (!m_deltaPageFailed && !m_pendingDeltaLink.isEmpty()) {
+            // Persist the cursor only after every file in its page has been
+            // written and hashed successfully.
+            m_deltaLink = m_pendingDeltaLink;
+            Q_EMIT deltaLinkChanged(m_pendingDeltaLink);
+        }
+        m_pendingDeltaLink.clear();
+        m_deltaPageFailed = false;
         Q_EMIT syncProgress(100, {});
         Q_EMIT syncFinished();
         Q_EMIT localStateChanged(localSignatures(), remotePaths());
@@ -655,14 +840,69 @@ void GraphClient::processNextFile()
         }
         return;
     }
-    const GraphSyncFile file = m_pendingFiles.dequeue();
-    log(QStringLiteral("Graph sync: downloading %1 (%2/%3)")
+}
+
+void GraphClient::startPendingDownloads()
+{
+    // Small files may pass a queued video, while large transfers have a
+    // separate cap so one video cannot occupy every download slot.
+    while (m_activeDownloads.size() < m_maxConcurrentDownloads && !m_pendingFiles.isEmpty()) {
+        int activeLarge = 0;
+        for (const auto &active : m_activeDownloads) {
+            if (active->file.size > largeUploadThreshold) {
+                ++activeLarge;
+            }
+        }
+        int selectedIndex = -1;
+        for (int index = 0; index < m_pendingFiles.size(); ++index) {
+            const bool large = m_pendingFiles.at(index).size > largeUploadThreshold;
+            if (!large || activeLarge < m_maxConcurrentLargeTransfers) {
+                selectedIndex = index;
+                break;
+            }
+        }
+        if (selectedIndex < 0) {
+            return;
+        }
+        QQueue<GraphSyncFile> remaining;
+        GraphSyncFile file;
+        for (int index = 0; index < m_pendingFiles.size(); ++index) {
+            GraphSyncFile candidate = m_pendingFiles.dequeue();
+            if (index == selectedIndex) {
+                file = std::move(candidate);
+            } else {
+                remaining.enqueue(std::move(candidate));
+            }
+        }
+        m_pendingFiles = std::move(remaining);
+        if (m_activeDownloads.contains(file.relativePath)) {
+            continue;
+        }
+        startDownload(file);
+    }
+}
+
+void GraphClient::startDownload(const GraphSyncFile &file)
+{
+    logProgress(QStringLiteral("Graph sync: downloading %1 (%2/%3)")
                  .arg(file.relativePath).arg(m_downloadedFiles + 1).arg(m_totalFiles));
+    Q_EMIT syncProgress(0, file.relativePath);
     const QString localPath = safeLocalPath(file.relativePath);
     if (localPath.isEmpty()) {
         Q_EMIT errorOccurred(QStringLiteral("Unsafe remote path rejected: %1").arg(file.relativePath));
         return;
     }
+    QDir().mkpath(QFileInfo(localPath).absolutePath());
+    auto transfer = std::make_shared<DownloadTransfer>();
+    transfer->file = file;
+    transfer->localPath = localPath;
+    transfer->output = std::make_unique<QSaveFile>(localPath);
+    if (!transfer->output->open(QIODevice::WriteOnly)) {
+        Q_EMIT errorOccurred(QStringLiteral("Could not open local file for download: %1")
+                                 .arg(file.relativePath));
+        return;
+    }
+    m_activeDownloads.insert(file.relativePath, transfer);
     const QString itemId = QString::fromUtf8(QUrl::toPercentEncoding(file.id));
     const QUrl url(QStringLiteral("https://graph.microsoft.com/v1.0/drives/%1/items/%2/content")
                        .arg(QString::fromUtf8(QUrl::toPercentEncoding(m_syncDriveId)), itemId));
@@ -673,13 +913,59 @@ void GraphClient::processNextFile()
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::ManualRedirectPolicy);
     auto *reply = m_network.get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, file, localPath] {
-        processDownloadedReply(reply, file, localPath);
+    connect(reply, &QNetworkReply::metaDataChanged, this, [this, reply, transfer] {
+        updateDownloadMetadata(reply, transfer);
+    });
+    connect(reply, &QNetworkReply::readyRead, this, [this, reply, transfer] {
+        writeDownloadChunk(reply, transfer);
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, transfer] {
+        processDownloadedReply(reply, transfer);
     });
 }
 
-void GraphClient::processDownloadedReply(QNetworkReply *reply, const GraphSyncFile &file,
-                                         const QString &localPath)
+void GraphClient::updateDownloadMetadata(QNetworkReply *reply,
+                                         const std::shared_ptr<DownloadTransfer> &transfer)
+{
+    const qint64 contentLength = reply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
+    if (contentLength > 0) {
+        transfer->totalBytes = contentLength;
+    }
+}
+
+void GraphClient::writeDownloadChunk(QNetworkReply *reply,
+                                     const std::shared_ptr<DownloadTransfer> &transfer)
+{
+    if (transfer->writeFailed || !transfer->output) {
+        return;
+    }
+    const QByteArray chunk = reply->readAll();
+    if (transfer->output->write(chunk) < 0) {
+        transfer->writeFailed = true;
+        return;
+    }
+    transfer->bytes += chunk.size();
+    if (transfer->totalBytes > 0) {
+        const int progress = static_cast<int>((transfer->bytes * 100) / transfer->totalBytes);
+        if (progress >= 100 || progress >= transfer->lastProgress + 5) {
+            transfer->lastProgress = progress;
+            logProgress(QStringLiteral("Graph sync: downloading %1 (%2%, %3/%4 MiB)")
+                    .arg(transfer->file.relativePath)
+                    .arg(progress)
+                    .arg(transfer->bytes / (1024 * 1024))
+                    .arg(transfer->totalBytes / (1024 * 1024)));
+            Q_EMIT syncProgress(progress, transfer->file.relativePath);
+        }
+    } else if (transfer->bytes - transfer->lastLogBytes >= 10 * 1024 * 1024) {
+        transfer->lastLogBytes = transfer->bytes;
+        logProgress(QStringLiteral("Graph sync: downloading %1 (%2 MiB)")
+                .arg(transfer->file.relativePath)
+                .arg(transfer->bytes / (1024 * 1024)));
+    }
+}
+
+void GraphClient::processDownloadedReply(QNetworkReply *reply,
+                                         const std::shared_ptr<DownloadTransfer> &transfer)
 {
     const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
     const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -687,41 +973,61 @@ void GraphClient::processDownloadedReply(QNetworkReply *reply, const GraphSyncFi
         const QUrl location = reply->url().resolved(
             reply->header(QNetworkRequest::LocationHeader).toUrl());
         if (!location.isValid() || location.scheme() != QLatin1String("https")) {
+            m_deltaPageFailed = true;
+            m_pendingDeltaLink.clear();
+            m_activeDownloads.remove(transfer->file.relativePath);
             Q_EMIT errorOccurred(QStringLiteral("Graph returned an invalid file download URL."));
+            processNextFile();
             return;
         }
-        log(QStringLiteral("Graph sync: following temporary download URL for %1")
-                     .arg(file.relativePath));
+        logProgress(QStringLiteral("Graph sync: following temporary download URL for %1")
+                     .arg(transfer->file.relativePath));
         QNetworkRequest downloadRequest(location);
         downloadRequest.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
         auto *downloadReply = m_network.get(downloadRequest);
+        connect(downloadReply, &QNetworkReply::metaDataChanged, this,
+                [this, downloadReply, transfer] {
+            updateDownloadMetadata(downloadReply, transfer);
+        });
+        connect(downloadReply, &QNetworkReply::readyRead, this,
+                [this, downloadReply, transfer] {
+            writeDownloadChunk(downloadReply, transfer);
+        });
         connect(downloadReply, &QNetworkReply::finished, this,
-                [this, downloadReply, file, localPath] {
-            processDownloadedReply(downloadReply, file, localPath);
+                [this, downloadReply, transfer] {
+            processDownloadedReply(downloadReply, transfer);
         });
         return;
     }
     if (reply->error() != QNetworkReply::NoError) {
+        m_deltaPageFailed = true;
+        m_pendingDeltaLink.clear();
+        m_activeDownloads.remove(transfer->file.relativePath);
         Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not download a remote file.")));
+        processNextFile();
         return;
     }
-        QFile output(localPath);
-        if (!output.open(QIODevice::WriteOnly | QIODevice::Truncate)
-            || output.write(reply->readAll()) < 0) {
-            Q_EMIT errorOccurred(QStringLiteral("Could not write local file: %1").arg(file.relativePath));
-            return;
-        }
-        output.close();
-        const QString signature = localFileSignature(localPath);
-        if (!signature.isEmpty()) {
-            m_localSignatures.insert(file.relativePath, signature);
-        }
-        ++m_downloadedFiles;
-        const int percent = m_totalFiles > 0
-            ? (m_downloadedFiles * 100) / m_totalFiles
-            : 100;
-        Q_EMIT syncProgress(percent, file.relativePath);
+    updateDownloadMetadata(reply, transfer);
+    writeDownloadChunk(reply, transfer);
+    if (transfer->writeFailed || !transfer->output || !transfer->output->commit()) {
+        m_deltaPageFailed = true;
+        m_pendingDeltaLink.clear();
+        m_activeDownloads.remove(transfer->file.relativePath);
+        Q_EMIT errorOccurred(QStringLiteral("Could not write local file: %1")
+                                 .arg(transfer->file.relativePath));
         processNextFile();
+        return;
+    }
+    m_activeDownloads.remove(transfer->file.relativePath);
+    logProgress(QStringLiteral("Graph sync: downloaded %1 (100%, %2 MiB)")
+            .arg(transfer->file.relativePath).arg(transfer->bytes / (1024 * 1024)));
+    const QString signature = localFileSignature(transfer->localPath);
+    if (!signature.isEmpty()) {
+        m_localSignatures.insert(transfer->file.relativePath, signature);
+    }
+    ++m_downloadedFiles;
+    Q_EMIT syncProgress(100, transfer->file.relativePath);
+    processNextFile();
 }
 
 void GraphClient::scanLocalChanges()
@@ -906,31 +1212,83 @@ void GraphClient::deleteNextRemoteFile()
 
 void GraphClient::uploadNextLocalFile()
 {
-    if (m_pendingUploads.isEmpty()) {
-        const bool completedUpload = m_uploadInProgress;
+    startPendingUploads();
+    if (m_uploadBatchActive && m_pendingUploads.isEmpty() && m_activeUploads.isEmpty()) {
+        m_uploadBatchActive = false;
         m_uploadInProgress = false;
-        if (completedUpload) {
-            Q_EMIT syncProgress(100, {});
-            Q_EMIT syncFinished();
-            Q_EMIT localStateChanged(localSignatures(), remotePaths());
+        Q_EMIT syncProgress(100, {});
+        Q_EMIT syncFinished();
+        Q_EMIT localStateChanged(localSignatures(), remotePaths());
+    }
+}
+
+void GraphClient::startPendingUploads()
+{
+    if (!m_pendingUploads.isEmpty()) {
+        m_uploadBatchActive = true;
+    }
+    while (m_activeUploads.size() < m_maxConcurrentUploads && !m_pendingUploads.isEmpty()) {
+        int activeLarge = 0;
+        for (const auto &active : m_activeUploads) {
+            if (QFileInfo(active->file.localPath).size() > largeUploadThreshold) {
+                ++activeLarge;
+            }
         }
-        return;
+
+        int selectedIndex = -1;
+        for (int index = 0; index < m_pendingUploads.size(); ++index) {
+            const bool large = QFileInfo(m_pendingUploads.at(index).localPath).size()
+                > largeUploadThreshold;
+            if (!large || activeLarge < m_maxConcurrentLargeTransfers) {
+                selectedIndex = index;
+                break;
+            }
+        }
+        if (selectedIndex < 0) {
+            return;
+        }
+
+        QQueue<GraphLocalFile> remaining;
+        GraphLocalFile selected;
+        for (int index = 0; index < m_pendingUploads.size(); ++index) {
+            GraphLocalFile candidate = m_pendingUploads.dequeue();
+            if (index == selectedIndex) {
+                selected = std::move(candidate);
+            } else {
+                remaining.enqueue(std::move(candidate));
+            }
+        }
+        m_pendingUploads = std::move(remaining);
+        m_pendingUploadPaths.remove(selected.relativePath);
+        startUpload(selected);
     }
-    m_uploadInProgress = true;
-    const GraphLocalFile file = m_pendingUploads.dequeue();
-    m_pendingUploadPaths.remove(file.relativePath);
+}
+
+void GraphClient::startUpload(const GraphLocalFile &file)
+{
+    // Each upload owns its network reply and state, allowing small files to
+    // continue while a large upload session is sending another chunk.
     const QFileInfo info(file.localPath);
-    if (!info.exists() || info.size() > 250 * 1024 * 1024) {
-        Q_EMIT errorOccurred(QStringLiteral("Local file cannot be uploaded directly (missing or larger than 250 MiB): %1")
+    if (!info.exists()) {
+        Q_EMIT errorOccurred(QStringLiteral("Local file cannot be uploaded (missing): %1")
                                  .arg(file.relativePath));
-        uploadNextLocalFile();
         return;
     }
+
+    auto transfer = std::make_shared<UploadTransfer>();
+    transfer->file = file;
+    m_activeUploads.insert(file.relativePath, transfer);
+    m_uploadInProgress = true;
+    if (info.size() > largeUploadThreshold) {
+        createUploadSession(transfer);
+        return;
+    }
+
     QFile input(file.localPath);
     if (!input.open(QIODevice::ReadOnly)) {
         Q_EMIT errorOccurred(QStringLiteral("Could not read local file for upload: %1")
                                  .arg(file.relativePath));
-        uploadNextLocalFile();
+        m_activeUploads.remove(file.relativePath);
         return;
     }
     const QByteArray contents = input.readAll();
@@ -939,33 +1297,159 @@ void GraphClient::uploadNextLocalFile()
                        .arg(QString::fromUtf8(QUrl::toPercentEncoding(m_syncDriveId)), encodedPath));
     QNetworkRequest request = graphRequest(url, m_syncToken.toUtf8());
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/octet-stream"));
-        log(QStringLiteral("Graph sync: uploading %1").arg(file.relativePath));
+    logProgress(QStringLiteral("Graph sync: uploading %1").arg(file.relativePath));
     Q_EMIT syncProgress(0, QStringLiteral("Uploading %1").arg(file.relativePath));
-    QNetworkReply *reply = m_network.put(request, contents);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, file] {
+    auto *reply = m_network.put(request, contents);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, transfer] {
         const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
         if (reply->error() != QNetworkReply::NoError) {
-            m_localSignatures.remove(file.relativePath);
+            m_localSignatures.remove(transfer->file.relativePath);
             Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not upload local file: %1")
-                                             .arg(file.relativePath)));
-        } else {
-            const QString signature = localFileSignature(file.localPath);
-            if (!signature.isEmpty()) {
-                m_localSignatures.insert(file.relativePath, signature);
-            }
-            const QJsonObject uploaded = QJsonDocument::fromJson(reply->readAll()).object();
-            const QString remoteId = uploaded.value(QStringLiteral("id")).toString();
-            if (!remoteId.isEmpty()) {
-                m_remoteItemIds.insert(file.relativePath, remoteId);
-                m_remotePathsById.insert(remoteId, file.relativePath);
-                m_remoteEtags.insert(remoteId, uploaded.value(QStringLiteral("eTag")).toString());
-                m_suppressedRemoteItemIds.insert(remoteId);
-            }
-            m_suppressedRemotePaths.insert(file.relativePath);
-            log(QStringLiteral("Graph sync: uploaded %1").arg(file.relativePath));
+                                             .arg(transfer->file.relativePath)));
+            m_activeUploads.remove(transfer->file.relativePath);
+            uploadNextLocalFile();
+            return;
         }
-        uploadNextLocalFile();
+        finishUpload(transfer, QJsonDocument::fromJson(reply->readAll()).object());
     });
+}
+
+void GraphClient::createUploadSession(const std::shared_ptr<UploadTransfer> &transfer)
+{
+    const QString encodedPath = QString::fromUtf8(QUrl::toPercentEncoding(
+        transfer->file.relativePath, "/"));
+    const QUrl url(QStringLiteral("https://graph.microsoft.com/v1.0/drives/%1/root:/%2:/createUploadSession")
+                       .arg(QString::fromUtf8(QUrl::toPercentEncoding(m_syncDriveId)), encodedPath));
+    QNetworkRequest request = graphRequest(url, m_syncToken.toUtf8());
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    const QJsonObject body{
+        {QStringLiteral("item"), QJsonObject{
+            {QStringLiteral("@microsoft.graph.conflictBehavior"), QStringLiteral("replace")},
+            {QStringLiteral("name"), QFileInfo(transfer->file.relativePath).fileName()}}}};
+    logProgress(QStringLiteral("Graph sync: creating upload session for %1")
+                    .arg(transfer->file.relativePath));
+    auto *reply = m_network.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, transfer] {
+        const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
+        if (reply->error() != QNetworkReply::NoError) {
+            Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not create upload session: %1")
+                                             .arg(transfer->file.relativePath)));
+            m_activeUploads.remove(transfer->file.relativePath);
+            uploadNextLocalFile();
+            return;
+        }
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll(), &parseError);
+        const QString uploadUrl = document.object().value(QStringLiteral("uploadUrl")).toString();
+        if (parseError.error != QJsonParseError::NoError || uploadUrl.isEmpty()) {
+            Q_EMIT errorOccurred(QStringLiteral("Graph returned an invalid upload session for %1")
+                                     .arg(transfer->file.relativePath));
+            m_activeUploads.remove(transfer->file.relativePath);
+            uploadNextLocalFile();
+            return;
+        }
+        transfer->uploadUrl = QUrl(uploadUrl);
+        transfer->size = QFileInfo(transfer->file.localPath).size();
+        transfer->offset = 0;
+        transfer->lastProgress = -1;
+        uploadNextChunk(transfer);
+    });
+}
+
+void GraphClient::uploadNextChunk(const std::shared_ptr<UploadTransfer> &transfer)
+{
+    QFile input(transfer->file.localPath);
+    if (!input.open(QIODevice::ReadOnly) || !input.seek(transfer->offset)) {
+        Q_EMIT errorOccurred(QStringLiteral("Could not read large local file: %1")
+                                 .arg(transfer->file.relativePath));
+        m_activeUploads.remove(transfer->file.relativePath);
+        uploadNextLocalFile();
+        return;
+    }
+    const qint64 remaining = transfer->size - transfer->offset;
+    const qint64 chunkSize = qMin(uploadChunkSize, remaining);
+    const QByteArray chunk = input.read(chunkSize);
+    if (chunk.size() != chunkSize) {
+        Q_EMIT errorOccurred(QStringLiteral("Could not read the complete upload chunk: %1")
+                                 .arg(transfer->file.relativePath));
+        m_activeUploads.remove(transfer->file.relativePath);
+        uploadNextLocalFile();
+        return;
+    }
+    const qint64 end = transfer->offset + chunk.size() - 1;
+    QNetworkRequest request(transfer->uploadUrl);
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
+    request.setHeader(QNetworkRequest::ContentLengthHeader, chunk.size());
+    request.setRawHeader("Content-Range", QByteArray("bytes ")
+                         + QByteArray::number(transfer->offset) + '-'
+                         + QByteArray::number(end) + '/'
+                         + QByteArray::number(transfer->size));
+    if (transfer->offset == 0) {
+        logProgress(QStringLiteral("Graph sync: uploading large file %1")
+                .arg(transfer->file.relativePath));
+    }
+    const int progress = static_cast<int>((transfer->offset * 100) / transfer->size);
+    if (progress >= 100 || progress >= transfer->lastProgress + 5) {
+        transfer->lastProgress = progress;
+        logProgress(QStringLiteral("Graph sync: uploading %1 (%2%, %3/%4 MiB)")
+                .arg(transfer->file.relativePath)
+                .arg(progress)
+                .arg(transfer->offset / (1024 * 1024))
+                .arg(transfer->size / (1024 * 1024)));
+    }
+    Q_EMIT syncProgress(progress, QStringLiteral("Uploading %1").arg(transfer->file.relativePath));
+    auto *reply = m_network.put(request, chunk);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, transfer, end] {
+        const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (reply->error() != QNetworkReply::NoError && status != 200 && status != 201) {
+            Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not upload large file: %1")
+                                             .arg(transfer->file.relativePath)));
+            m_activeUploads.remove(transfer->file.relativePath);
+            uploadNextLocalFile();
+            return;
+        }
+        const QByteArray response = reply->readAll();
+        if (status == 200 || status == 201) {
+            finishUpload(transfer, QJsonDocument::fromJson(response).object());
+            return;
+        }
+        transfer->offset = end + 1;
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(response, &parseError);
+        if (parseError.error == QJsonParseError::NoError && document.isObject()) {
+            const QJsonArray ranges = document.object().value(QStringLiteral("nextExpectedRanges"))
+                                           .toArray();
+            if (!ranges.isEmpty()) {
+                const QString range = ranges.first().toString();
+                transfer->offset = range.section(QLatin1Char('-'), 0, 0).toLongLong();
+            }
+        }
+        uploadNextChunk(transfer);
+    });
+}
+
+void GraphClient::finishUpload(const std::shared_ptr<UploadTransfer> &transfer,
+                               const QJsonObject &uploaded)
+{
+    // Update the baseline before releasing the active slot. The following
+    // delta therefore recognizes Graph's echo as already handled.
+    const QString signature = localFileSignature(transfer->file.localPath);
+    if (!signature.isEmpty()) {
+        m_localSignatures.insert(transfer->file.relativePath, signature);
+    }
+    const QString remoteId = uploaded.value(QStringLiteral("id")).toString();
+    if (!remoteId.isEmpty()) {
+        m_remoteItemIds.insert(transfer->file.relativePath, remoteId);
+        m_remotePathsById.insert(remoteId, transfer->file.relativePath);
+        m_remoteEtags.insert(remoteId, uploaded.value(QStringLiteral("eTag")).toString());
+        m_suppressedRemoteItemIds.insert(remoteId);
+    }
+    m_suppressedRemotePaths.insert(transfer->file.relativePath);
+    Q_EMIT syncProgress(100, QStringLiteral("Uploading %1").arg(transfer->file.relativePath));
+    logProgress(QStringLiteral("Graph sync: uploaded %1").arg(transfer->file.relativePath));
+    m_activeUploads.remove(transfer->file.relativePath);
+    uploadNextLocalFile();
 }
 
 bool GraphClient::isIncluded(const QString &relativePath) const

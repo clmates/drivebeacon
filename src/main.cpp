@@ -75,6 +75,9 @@ int main(int argc, char *argv[])
     tray.setCategory(KStatusNotifierItem::SystemServices);
     tray.setIconByName(QStringLiteral("folder-cloud"));
     tray.setTitle(i18n("DriveBeacon"));
+    // KStatusNotifierItem contributes the localized standard Quit action;
+    // keep it as the single application-exit entry in the tray menu.
+    tray.setStandardActionsEnabled(true);
 
     QAction *statusAction = new QAction(&application);
     statusAction->setEnabled(false);
@@ -94,7 +97,6 @@ int main(int argc, char *argv[])
     QAction *restartAction = new QAction(i18n("Restart synchronization"), &application);
     QAction *configurationAction = new QAction(i18n("Configure profiles…"), &application);
     QAction *aboutAction = new QAction(i18n("About DriveBeacon"), &application);
-    QAction *quitAction = new QAction(i18n("Quit"), &application);
 
     auto *popupMenu = new QMenu;
     popupMenu->addAction(statusAction);
@@ -114,7 +116,6 @@ int main(int argc, char *argv[])
         menu->addSeparator();
         menu->addAction(configurationAction);
         menu->addAction(aboutAction);
-        menu->addAction(quitAction);
     };
 
     addServiceActions(popupMenu);
@@ -199,6 +200,7 @@ int main(int argc, char *argv[])
                         ? i18n("Moved")
                         : completed ? i18n("Deleted") : i18n("Deleting");
             const QString label = operation == QLatin1String("graph-log")
+                || operation == QLatin1String("graph-progress")
                 ? index.data(ActivityModel::MessageRole).toString()
                 : destination.isEmpty()
                 ? QStringLiteral("%1 · %2").arg(path, state)
@@ -212,6 +214,10 @@ int main(int argc, char *argv[])
                      &application, rebuildActivities);
     QObject::connect(controller.activities(), &QAbstractItemModel::rowsRemoved,
                      &application, rebuildActivities);
+    QObject::connect(controller.activities(), &QAbstractItemModel::dataChanged,
+                     &application, rebuildActivities);
+    QObject::connect(controller.activities(), &QAbstractItemModel::rowsMoved,
+                     &application, rebuildActivities);
     QObject::connect(controller.activities(), &QAbstractItemModel::modelReset,
                      &application, rebuildActivities);
     rebuildActivities();
@@ -222,7 +228,7 @@ int main(int argc, char *argv[])
         aboutDialog.raise();
         aboutDialog.activateWindow();
     });
-    QObject::connect(quitAction, &QAction::triggered,
+    QObject::connect(&tray, &KStatusNotifierItem::quitRequested,
                      &application, &QApplication::quit);
 
     // Keep tray actions and attention state synchronized with the backend properties.

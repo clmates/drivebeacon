@@ -133,12 +133,30 @@ OneDriveController::OneDriveController(const QString &profileName,
                     || m_profile.graphLocalSignatures.isEmpty()
                     || m_profile.graphRemotePaths.isEmpty()) {
                     synchronizeGraph();
+                } else if (m_profile.graphSyncedIncludedFolders != m_profile.includedFolders
+                           || m_profile.graphSyncedExcludedFolders != m_profile.excludedFolders) {
+                    // A folder-policy edit is incremental: preserve local
+                    // files from deselected folders and enumerate only to
+                    // discover existing files in newly selected folders.
+                    m_graphClient.initializeLocalMonitoring(m_profile.graphLocalSignatures,
+                                                            m_profile.graphRemotePaths,
+                                                            m_profile.localDirectory);
+                    m_graphClient.configureTransferConcurrency(
+                        m_profile.concurrentDownloads, m_profile.concurrentUploads,
+                        m_profile.concurrentLargeTransfers);
+                    m_graphClient.refreshSelectedFolders(
+                        m_profile.remoteDriveId, m_graphTokens.accessToken,
+                        m_profile.localDirectory, m_profile.includedFolders,
+                        m_profile.excludedFolders);
                 } else {
                     // A persisted delta cursor means the local tree already
                     // has a known baseline; do not replay the initial download.
                     m_graphClient.initializeLocalMonitoring(m_profile.graphLocalSignatures,
                                                             m_profile.graphRemotePaths,
                                                             m_profile.localDirectory);
+                    m_graphClient.configureTransferConcurrency(
+                        m_profile.concurrentDownloads, m_profile.concurrentUploads,
+                        m_profile.concurrentLargeTransfers);
                     m_graphClient.startRemoteMonitoring(
                         m_profile.remoteDriveId, m_graphTokens.accessToken,
                         m_profile.remoteCheckIntervalSeconds, m_profile.graphDeltaLink);
@@ -170,9 +188,20 @@ OneDriveController::OneDriveController(const QString &profileName,
                         : path.startsWith(QStringLiteral("Uploading "))
                             ? path
                         : QStringLiteral("Downloading %1").arg(path);
+                if (!path.isEmpty() && !path.startsWith(QStringLiteral("Listing "))) {
+                    const bool uploading = path.startsWith(QStringLiteral("Uploading "));
+                    const QString transferPath = uploading ? path.sliced(10) : path;
+                    m_activities.updateGraphProgress(
+                        transferPath,
+                        QStringLiteral("%1 · %2%").arg(transferPath).arg(progress),
+                        progress >= 100);
+                }
                 Q_EMIT graphSyncChanged();
             });
     connect(&m_graphClient, &GraphClient::syncFinished, this, [this] {
+        m_profile.graphSyncedIncludedFolders = m_profile.includedFolders;
+        m_profile.graphSyncedExcludedFolders = m_profile.excludedFolders;
+        m_profileStore.save(m_profile);
         m_graphSyncProgress = 100;
         m_graphSyncStatus = QStringLiteral("Completed");
         Q_EMIT graphSyncChanged();
@@ -488,6 +517,9 @@ void OneDriveController::synchronizeGraph()
     // could replay changes that this enumeration has already applied.
     m_profile.graphDeltaLink.clear();
     m_profileStore.save(m_profile);
+    m_graphClient.configureTransferConcurrency(
+        m_profile.concurrentDownloads, m_profile.concurrentUploads,
+        m_profile.concurrentLargeTransfers);
     m_graphClient.synchronize(m_profile.remoteDriveId, m_graphTokens.accessToken,
                               m_profile.localDirectory, m_profile.includedFolders,
                               m_profile.excludedFolders);

@@ -56,6 +56,12 @@ SyncProfile ProfileStore::load(const QString &requestedName) const
             .toString());
     profile.remoteCheckIntervalSeconds = qBound(10, settings.value(
         QStringLiteral("remoteCheckIntervalSeconds"), profile.remoteCheckIntervalSeconds).toInt(), 3600);
+    profile.concurrentDownloads = qBound(1, settings.value(
+        QStringLiteral("concurrentDownloads"), profile.concurrentDownloads).toInt(), 8);
+    profile.concurrentUploads = qBound(1, settings.value(
+        QStringLiteral("concurrentUploads"), profile.concurrentUploads).toInt(), 8);
+    profile.concurrentLargeTransfers = qBound(1, settings.value(
+        QStringLiteral("concurrentLargeTransfers"), profile.concurrentLargeTransfers).toInt(), 4);
     profile.graphDeltaLink = settings.value(QStringLiteral("graphDeltaLink")).toString();
     profile.graphLocalSignatures = settings.value(QStringLiteral("graphLocalSignatures"))
                                        .toStringList();
@@ -65,6 +71,10 @@ SyncProfile ProfileStore::load(const QString &requestedName) const
     profile.graphRemotePaths = settings.value(QStringLiteral("graphRemotePaths")).toStringList();
     profile.includedFolders = settings.value(QStringLiteral("includedFolders")).toStringList();
     profile.excludedFolders = settings.value(QStringLiteral("excludedFolders")).toStringList();
+    profile.graphSyncedIncludedFolders = settings.value(
+        QStringLiteral("graphSyncedIncludedFolders")).toStringList();
+    profile.graphSyncedExcludedFolders = settings.value(
+        QStringLiteral("graphSyncedExcludedFolders")).toStringList();
     return profile;
 }
 
@@ -82,11 +92,19 @@ void ProfileStore::save(const SyncProfile &profile)
     settings.setValue(QStringLiteral("availability"), localAvailabilityName(profile.availability));
     settings.setValue(QStringLiteral("remoteCheckIntervalSeconds"),
                       qBound(10, profile.remoteCheckIntervalSeconds, 3600));
+    settings.setValue(QStringLiteral("concurrentDownloads"), qBound(1, profile.concurrentDownloads, 8));
+    settings.setValue(QStringLiteral("concurrentUploads"), qBound(1, profile.concurrentUploads, 8));
+    settings.setValue(QStringLiteral("concurrentLargeTransfers"),
+                      qBound(1, profile.concurrentLargeTransfers, 4));
     settings.setValue(QStringLiteral("graphDeltaLink"), profile.graphDeltaLink);
     settings.setValue(QStringLiteral("graphLocalSignatures"), profile.graphLocalSignatures);
     settings.setValue(QStringLiteral("graphRemotePaths"), profile.graphRemotePaths);
     settings.setValue(QStringLiteral("includedFolders"), profile.includedFolders);
     settings.setValue(QStringLiteral("excludedFolders"), profile.excludedFolders);
+    settings.setValue(QStringLiteral("graphSyncedIncludedFolders"),
+                      profile.graphSyncedIncludedFolders);
+    settings.setValue(QStringLiteral("graphSyncedExcludedFolders"),
+                      profile.graphSyncedExcludedFolders);
     settings.endGroup();
     settings.sync();
 }
