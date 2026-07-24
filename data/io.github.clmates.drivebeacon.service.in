@@ -1,0 +1,12 @@
+[Unit]
+Description=DriveBeacon synchronization service
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/drivebeacon-service --profile default
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

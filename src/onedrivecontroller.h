@@ -141,6 +141,8 @@ Q_SIGNALS:
     void graphRemoteFoldersChanged();
     /** Emitted when a 0.1.x abraunegg configuration needs a profile name. */
     void legacyProfileDetected(const QString &localDirectory);
+    /** Emitted for backend diagnostics that a service client may display. */
+    void logMessage(const QString &message);
 
 private:
     /** Runs onedrive's configuration display command and extracts sync_dir. */

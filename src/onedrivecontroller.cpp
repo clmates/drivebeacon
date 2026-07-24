@@ -224,6 +224,7 @@ OneDriveController::OneDriveController(const QString &profileName,
             [this](const QString &message) {
         m_activities.prepend({QDateTime::currentDateTimeUtc(), QStringLiteral("graph-log"),
                               {}, {}, message, true});
+        Q_EMIT logMessage(message);
     });
     // `onedrive --display-config` is asynchronous because configuration lookup may start a process.
     connect(&m_configProcess, &QProcess::finished, this,

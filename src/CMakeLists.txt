@@ -34,6 +34,39 @@ target_sources(drivebeacon PRIVATE
     tokenpayload.h
 )
 
+add_executable(drivebeacon-service)
+set_target_properties(drivebeacon-service PROPERTIES OUTPUT_NAME drivebeacon-service)
+target_sources(drivebeacon-service PRIVATE
+    activityevent.h
+    activitymodel.cpp
+    activitymodel.h
+    activityparser.cpp
+    activityparser.h
+    deviceloginauth.cpp
+    deviceloginauth.h
+    drivebeaconservice.cpp
+    drivebeaconservice.h
+    graphclient.cpp
+    graphclient.h
+    journalreader.cpp
+    journalreader.h
+    onedrivecontroller.cpp
+    onedrivecontroller.h
+    profilestore.cpp
+    profilestore.h
+    storagequota.cpp
+    storagequota.h
+    systemdmanager.cpp
+    systemdmanager.h
+    syncprofile.cpp
+    syncprofile.h
+    service_main.cpp
+    tokenstore.cpp
+    tokenstore.h
+    tokenpayload.cpp
+    tokenpayload.h
+)
+
 target_compile_features(drivebeacon PRIVATE cxx_std_20)
 target_compile_definitions(drivebeacon PRIVATE DRIVEBEACON_VERSION="${PROJECT_VERSION}")
 target_link_libraries(drivebeacon PRIVATE
@@ -50,9 +83,30 @@ target_link_libraries(drivebeacon PRIVATE
     systemd
 )
 
+target_compile_features(drivebeacon-service PRIVATE cxx_std_20)
+target_compile_definitions(drivebeacon-service PRIVATE DRIVEBEACON_VERSION="${PROJECT_VERSION}")
+target_link_libraries(drivebeacon-service PRIVATE
+    Qt6::Core
+    Qt6::DBus
+    Qt6::Network
+    KF6::CoreAddons
+    KF6::I18n
+    KF6::Wallet
+    systemd
+)
+
 ecm_create_qm_loader(drivebeacon drivebeacon)
 
 install(TARGETS drivebeacon ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
+install(TARGETS drivebeacon-service ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
+configure_file(
+    "${CMAKE_SOURCE_DIR}/data/io.github.clmates.drivebeacon.service.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/io.github.clmates.drivebeacon.service"
+    @ONLY
+)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/io.github.clmates.drivebeacon.service"
+    DESTINATION ${KDE_INSTALL_LIBDIR}/systemd/user
+)
 install(PROGRAMS ../data/io.github.clmates.drivebeacon.desktop
     DESTINATION ${KDE_INSTALL_APPDIR}
 )
