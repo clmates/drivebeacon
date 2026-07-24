@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "onedrivecontroller.h"
+#include "profiledialog.h"
 
 #include <KAboutData>
 #include <KAboutApplicationDialog>
@@ -9,14 +10,31 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCommandLineParser>
+#include <QCoreApplication>
 #include <QDateTime>
+#include <QLocale>
 #include <QMenu>
+#include <QInputDialog>
+#include <QProcess>
+
+namespace {
+/** Formats byte counts for the tray without exposing provider-specific units. */
+QString formatBytes(qint64 bytes)
+{
+    return bytes < 0 ? i18n("Unavailable")
+                     : QLocale().formattedDataSize(bytes, 2, QLocale::DataSizeTraditionalFormat);
+}
+}
 
 /** Creates the application and exposes status and activity through a native tray menu. */
 int main(int argc, char *argv[])
 {
     QApplication application(argc, argv);
     application.setQuitOnLastWindowClosed(false);
+    application.setOrganizationDomain(QStringLiteral("io.github.clmates"));
+    application.setOrganizationName(QStringLiteral("clmates"));
+    application.setApplicationName(QStringLiteral("drivebeacon"));
     KLocalizedString::setApplicationDomain("drivebeacon");
 
     KAboutData aboutData(
@@ -35,8 +53,25 @@ int main(int argc, char *argv[])
     aboutData.addAuthor(QStringLiteral("clmates"), i18n("Development"));
     KAboutData::setApplicationData(aboutData);
 
-    OneDriveController controller;
-    KStatusNotifierItem tray(QStringLiteral("drivebeacon"));
+    QCommandLineParser commandLine;
+    commandLine.setApplicationDescription(i18n("Monitor and control OneDrive synchronization"));
+    commandLine.addHelpOption();
+    commandLine.addOption({QStringLiteral("profile"),
+                           i18n("Use an isolated synchronization profile."),
+                           QStringLiteral("name")});
+    commandLine.addOption({QStringLiteral("backend"),
+                           i18n("Override the profile backend (abraunegg-journal or graph)."),
+                           QStringLiteral("backend")});
+    commandLine.addOption({QStringLiteral("local-directory"),
+                           i18n("Override the profile local directory."),
+                           QStringLiteral("path")});
+    commandLine.process(application);
+
+    OneDriveController controller(commandLine.value(QStringLiteral("profile")),
+                                  commandLine.value(QStringLiteral("backend")),
+                                  commandLine.value(QStringLiteral("local-directory")));
+    const QString trayId = QStringLiteral("drivebeacon-%1").arg(controller.profileName());
+    KStatusNotifierItem tray(trayId);
     tray.setCategory(KStatusNotifierItem::SystemServices);
     tray.setIconByName(QStringLiteral("folder-cloud"));
     tray.setTitle(i18n("DriveBeacon"));
@@ -45,6 +80,9 @@ int main(int argc, char *argv[])
     statusAction->setEnabled(false);
     QAction *directoryAction = new QAction(&application);
     directoryAction->setEnabled(false);
+    QAction *remoteQuotaAction = new QAction(&application);
+    remoteQuotaAction->setEnabled(false);
+    QAction *graphSyncAction = new QAction(&application);
     QAction *activityHeader = new QAction(i18n("Recent activity"), &application);
     activityHeader->setEnabled(false);
     QAction *emptyActivityAction = new QAction(
@@ -54,12 +92,15 @@ int main(int argc, char *argv[])
     QAction *startAction = new QAction(i18n("Start synchronization"), &application);
     QAction *stopAction = new QAction(i18n("Stop synchronization"), &application);
     QAction *restartAction = new QAction(i18n("Restart synchronization"), &application);
+    QAction *configurationAction = new QAction(i18n("Configure profiles…"), &application);
     QAction *aboutAction = new QAction(i18n("About DriveBeacon"), &application);
     QAction *quitAction = new QAction(i18n("Quit"), &application);
 
     auto *popupMenu = new QMenu;
     popupMenu->addAction(statusAction);
     popupMenu->addAction(directoryAction);
+    popupMenu->addAction(remoteQuotaAction);
+    popupMenu->addAction(graphSyncAction);
     popupMenu->addSeparator();
     popupMenu->addAction(activityHeader);
     popupMenu->addAction(emptyActivityAction);
@@ -71,6 +112,7 @@ int main(int argc, char *argv[])
         menu->addAction(stopAction);
         menu->addAction(restartAction);
         menu->addSeparator();
+        menu->addAction(configurationAction);
         menu->addAction(aboutAction);
         menu->addAction(quitAction);
     };
@@ -85,8 +127,41 @@ int main(int argc, char *argv[])
                      &controller, &OneDriveController::stopService);
     QObject::connect(restartAction, &QAction::triggered,
                      &controller, &OneDriveController::restartService);
+    QObject::connect(graphSyncAction, &QAction::triggered,
+                     &controller, &OneDriveController::synchronizeGraph);
     QObject::connect(clearActivityAction, &QAction::triggered,
                      controller.activities(), &ActivityModel::clear);
+    QObject::connect(configurationAction, &QAction::triggered, &application, [&] {
+        auto *dialog = new ProfileDialog(controller.profileStore(), &controller, nullptr);
+        QObject::connect(dialog, &ProfileDialog::useProfileRequested,
+                         &application, [dialog, &application](const QString &profileName) {
+                             const QString executable = QCoreApplication::applicationFilePath();
+                             QProcess::startDetached(executable, {QStringLiteral("--profile"), profileName});
+                             dialog->close();
+                             dialog->deleteLater();
+                             application.quit();
+                         });
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->show();
+        dialog->raise();
+        dialog->activateWindow();
+    });
+    QObject::connect(&controller, &OneDriveController::legacyProfileDetected,
+                     &application, [&controller](const QString &) {
+                         bool accepted = false;
+                         const QString profileName = QInputDialog::getText(
+                             nullptr,
+                             i18n("Import abraunegg configuration"),
+                             i18n("Profile name for the existing abraunegg configuration:"),
+                             QLineEdit::Normal,
+                             QStringLiteral("abraunegg"),
+                             &accepted);
+                         if (accepted) {
+                             controller.confirmLegacyMigration(profileName);
+                         } else {
+                             controller.dismissLegacyMigration();
+                         }
+                     });
 
     QList<QAction *> activityActions;
     for (int row = 0; row < 20; ++row) {
@@ -123,7 +198,9 @@ int main(int argc, char *argv[])
                     : operation == QLatin1String("move")
                         ? i18n("Moved")
                         : completed ? i18n("Deleted") : i18n("Deleting");
-            const QString label = destination.isEmpty()
+            const QString label = operation == QLatin1String("graph-log")
+                ? index.data(ActivityModel::MessageRole).toString()
+                : destination.isEmpty()
                 ? QStringLiteral("%1 · %2").arg(path, state)
                 : QStringLiteral("%1 → %2 · %3").arg(path, destination, state);
             action->setText(label);
@@ -153,9 +230,16 @@ int main(int argc, char *argv[])
         const bool running = controller.activeState() == QLatin1String("active");
         statusAction->setText(i18n("Status: %1", controller.statusText()));
         directoryAction->setText(i18n("Local folder: %1", controller.syncDirectory()));
-        startAction->setEnabled(!running);
-        stopAction->setEnabled(running);
-        restartAction->setEnabled(running);
+        remoteQuotaAction->setText(i18n("Remote storage: %1 used · %2 available · %3 total",
+                                       formatBytes(controller.remoteQuotaUsed()),
+                                       formatBytes(controller.remoteQuotaRemaining()),
+                                       formatBytes(controller.remoteQuotaTotal())));
+        const bool serviceControl = controller.serviceControlAvailable();
+        graphSyncAction->setText(i18n("Graph sync: %1", controller.graphSyncStatus()));
+        graphSyncAction->setEnabled(!serviceControl && controller.graphAuthenticated());
+        startAction->setEnabled(serviceControl && !running);
+        stopAction->setEnabled(serviceControl && running);
+        restartAction->setEnabled(serviceControl && running);
         tray.setStatus(controller.activeState() == QLatin1String("failed")
                            ? KStatusNotifierItem::NeedsAttention
                            : running ? KStatusNotifierItem::Active
@@ -164,6 +248,14 @@ int main(int argc, char *argv[])
                         controller.statusText());
     };
     QObject::connect(&controller, &OneDriveController::stateChanged, &application, updateTray);
+    QObject::connect(&controller, &OneDriveController::remoteQuotaChanged,
+                     &application, updateTray);
+    QObject::connect(&controller, &OneDriveController::profileChanged,
+                     &application, updateTray);
+    QObject::connect(&controller, &OneDriveController::graphAuthChanged,
+                     &application, updateTray);
+    QObject::connect(&controller, &OneDriveController::graphSyncChanged,
+                     &application, updateTray);
     updateTray();
 
     return application.exec();

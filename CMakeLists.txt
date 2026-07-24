@@ -2,7 +2,7 @@
 
 cmake_minimum_required(VERSION 3.20)
 
-project(drivebeacon VERSION 0.1.2 LANGUAGES CXX)
+project(drivebeacon VERSION 0.1.3 LANGUAGES CXX)
 
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share/applications")
 configure_file(
@@ -25,6 +25,7 @@ find_package(Qt6 6.7 REQUIRED COMPONENTS
     Core
     DBus
     Gui
+    Network
     Test
     Widgets
 )
@@ -32,6 +33,7 @@ find_package(KF6 6.0 REQUIRED COMPONENTS
     CoreAddons
     I18n
     StatusNotifierItem
+    Wallet
     XmlGui
 )
 

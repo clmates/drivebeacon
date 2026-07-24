@@ -9,13 +9,29 @@ target_sources(drivebeacon PRIVATE
     activitymodel.h
     activityparser.cpp
     activityparser.h
+    deviceloginauth.cpp
+    deviceloginauth.h
+    graphclient.cpp
+    graphclient.h
     journalreader.cpp
     journalreader.h
     main.cpp
     onedrivecontroller.cpp
     onedrivecontroller.h
+    profiledialog.cpp
+    profiledialog.h
+    profilestore.cpp
+    profilestore.h
+    storagequota.cpp
+    storagequota.h
     systemdmanager.cpp
     systemdmanager.h
+    syncprofile.cpp
+    syncprofile.h
+    tokenstore.cpp
+    tokenstore.h
+    tokenpayload.cpp
+    tokenpayload.h
 )
 
 target_compile_features(drivebeacon PRIVATE cxx_std_20)
@@ -24,11 +40,14 @@ target_link_libraries(drivebeacon PRIVATE
     Qt6::Core
     Qt6::DBus
     Qt6::Gui
+    Qt6::Network
     Qt6::Widgets
     KF6::CoreAddons
     KF6::I18n
     KF6::StatusNotifierItem
+    KF6::Wallet
     KF6::XmlGui
+    systemd
 )
 
 ecm_create_qm_loader(drivebeacon drivebeacon)
