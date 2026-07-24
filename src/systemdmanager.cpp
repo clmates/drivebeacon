@@ -19,11 +19,11 @@ constexpr auto managerPath = "/org/freedesktop/systemd1";
 constexpr auto managerInterface = "org.freedesktop.systemd1.Manager";
 constexpr auto propertiesInterface = "org.freedesktop.DBus.Properties";
 constexpr auto unitInterface = "org.freedesktop.systemd1.Unit";
-constexpr auto unitName = "onedrive.service";
 }
 
-SystemdManager::SystemdManager(QObject *parent)
+SystemdManager::SystemdManager(const QString &unitName, QObject *parent)
     : QObject(parent)
+    , m_unitName(unitName)
 {
     // Polling avoids depending on a separate PropertiesChanged subscription and keeps startup simple.
     m_refreshTimer.setInterval(3000);
@@ -59,7 +59,7 @@ void SystemdManager::refresh()
     QDBusInterface manager(QLatin1String(serviceName), QLatin1String(managerPath),
                            QLatin1String(managerInterface), connection);
     const QDBusReply<QDBusObjectPath> unitReply = manager.call(QStringLiteral("GetUnit"),
-                                                                QLatin1String(unitName));
+                                                                m_unitName);
     if (!unitReply.isValid()) {
         if (m_activeState != QLatin1String("not-found")) {
             m_activeState = QStringLiteral("not-found");
@@ -114,7 +114,7 @@ void SystemdManager::callManager(const QString &method)
     QDBusInterface manager(QLatin1String(serviceName), QLatin1String(managerPath),
                            QLatin1String(managerInterface), connection);
     auto *watcher = new QDBusPendingCallWatcher(
-        manager.asyncCall(method, QLatin1String(unitName), QStringLiteral("replace")), this);
+        manager.asyncCall(method, m_unitName, QStringLiteral("replace")), this);
     connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, watcher] {
         const QDBusPendingReply<QDBusObjectPath> reply = *watcher;
         if (reply.isError()) {

@@ -11,6 +11,8 @@ target_sources(drivebeacon PRIVATE
     activityparser.h
     deviceloginauth.cpp
     deviceloginauth.h
+    drivebeaconserviceclient.cpp
+    drivebeaconserviceclient.h
     graphclient.cpp
     graphclient.h
     journalreader.cpp
@@ -100,12 +102,12 @@ ecm_create_qm_loader(drivebeacon drivebeacon)
 install(TARGETS drivebeacon ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
 install(TARGETS drivebeacon-service ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
 configure_file(
-    "${CMAKE_SOURCE_DIR}/data/io.github.clmates.drivebeacon.service.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/io.github.clmates.drivebeacon.service"
+    "${CMAKE_SOURCE_DIR}/data/drivebeacon-service.service.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/drivebeacon-service.service"
     @ONLY
 )
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/io.github.clmates.drivebeacon.service"
-    DESTINATION ${KDE_INSTALL_LIBDIR}/systemd/user
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/drivebeacon-service.service"
+    DESTINATION ${KDE_INSTALL_DATADIR}/systemd/user
 )
 install(PROGRAMS ../data/io.github.clmates.drivebeacon.desktop
     DESTINATION ${KDE_INSTALL_APPDIR}

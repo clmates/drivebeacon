@@ -4,7 +4,7 @@
 
 DriveBeaconService::DriveBeaconService(const QString &profileName, QObject *parent)
     : QObject(parent)
-    , m_controller(profileName, {}, {}, this)
+    , m_controller(profileName, {}, {}, true, this)
 {
     connect(&m_controller, &OneDriveController::graphSyncChanged,
             this, &DriveBeaconService::publishStatus);
@@ -19,6 +19,11 @@ DriveBeaconService::DriveBeaconService(const QString &profileName, QObject *pare
 QString DriveBeaconService::profileName() const
 {
     return m_controller.profileName();
+}
+
+QString DriveBeaconService::backendName() const
+{
+    return m_controller.backendName();
 }
 
 QString DriveBeaconService::syncStatus() const

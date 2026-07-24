@@ -219,6 +219,7 @@ GraphClient::GraphClient(QObject *parent)
                             QDir().rmdir(localPath);
                         }
                         m_localSignatures.remove(oldPath);
+                        m_localMetadata.remove(oldPath);
                         m_pendingRemoteDeletePaths.remove(oldPath);
                         QQueue<GraphLocalFile> remainingUploads;
                         while (!m_pendingUploads.isEmpty()) {
@@ -335,6 +336,9 @@ GraphClient::GraphClient(QObject *parent)
                         if (!signature.isEmpty()) {
                             m_localSignatures.insert(renamedPath, signature);
                         }
+                        if (m_localMetadata.contains(oldPath)) {
+                            m_localMetadata.insert(renamedPath, m_localMetadata.take(oldPath));
+                        }
                     }
                     m_remoteItemIds.remove(oldPath);
                     m_remoteItemIds.insert(renamedPath, itemId);
@@ -419,6 +423,7 @@ void GraphClient::initializeLocalMonitoring(const QStringList &signatures,
 {
     m_syncDirectory = QDir::cleanPath(QFileInfo(localDirectory).absoluteFilePath());
     m_localSignatures.clear();
+    m_localMetadata.clear();
     for (const QString &entry : signatures) {
         const int separator = entry.indexOf(QLatin1Char('\t'));
         if (separator > 0) {
@@ -427,9 +432,15 @@ void GraphClient::initializeLocalMonitoring(const QStringList &signatures,
             // strictly two-field records from now on.
             const QString storedHash = entry.sliced(separator + 1);
             const int legacyEtags = storedHash.indexOf(QLatin1Char('\t'));
-            m_localSignatures.insert(entry.left(separator), legacyEtags < 0
+            const QString relativePath = entry.left(separator);
+            m_localSignatures.insert(relativePath, legacyEtags < 0
                                          ? storedHash
                                          : storedHash.left(legacyEtags));
+            const QFileInfo fileInfo(safeLocalPath(relativePath));
+            if (fileInfo.isFile()) {
+                m_localMetadata.insert(relativePath,
+                                       {fileInfo.size(), fileInfo.lastModified()});
+            }
         }
     }
     m_remoteItemIds.clear();
@@ -1024,6 +1035,9 @@ void GraphClient::processDownloadedReply(QNetworkReply *reply,
     const QString signature = localFileSignature(transfer->localPath);
     if (!signature.isEmpty()) {
         m_localSignatures.insert(transfer->file.relativePath, signature);
+        const QFileInfo fileInfo(transfer->localPath);
+        m_localMetadata.insert(transfer->file.relativePath,
+                               {fileInfo.size(), fileInfo.lastModified()});
     }
     ++m_downloadedFiles;
     Q_EMIT syncProgress(100, transfer->file.relativePath);
@@ -1045,11 +1059,22 @@ void GraphClient::scanLocalChanges()
             continue;
         }
         currentPaths.insert(relativePath);
+        const QFileInfo fileInfo(localPath);
+        const QPair<qint64, QDateTime> metadata{fileInfo.size(), fileInfo.lastModified()};
+        // Hashing is intentionally the correctness fallback. For unchanged
+        // files, size+mtime lets the 10-second polling loop avoid rereading
+        // large videos from disk on every pass.
+        if (m_localSignatures.contains(relativePath)
+            && m_localMetadata.value(relativePath) == metadata) {
+            currentSignatures.insert(relativePath, m_localSignatures.value(relativePath));
+            continue;
+        }
         const QString signature = localFileSignature(localPath);
         if (signature.isEmpty()) {
             continue;
         }
         currentSignatures.insert(relativePath, signature);
+        m_localMetadata.insert(relativePath, metadata);
     }
     QSet<QString> renamedOldPaths;
     QSet<QString> renamedNewPaths;
@@ -1141,6 +1166,9 @@ void GraphClient::renameNextRemoteFile()
                     .arg(rename.oldPath, rename.newPath));
             const QString signature = m_localSignatures.take(rename.oldPath);
             m_localSignatures.insert(rename.newPath, signature);
+            if (m_localMetadata.contains(rename.oldPath)) {
+                m_localMetadata.insert(rename.newPath, m_localMetadata.take(rename.oldPath));
+            }
             m_remoteItemIds.remove(rename.oldPath);
             m_remoteItemIds.insert(rename.newPath, rename.itemId);
             m_remotePathsById.insert(rename.itemId, rename.newPath);
@@ -1188,6 +1216,7 @@ void GraphClient::deleteNextRemoteFile()
                 m_remoteItemIds.remove(file.relativePath);
                 if (!QFileInfo(safeLocalPath(file.relativePath)).exists()) {
                     m_localSignatures.remove(file.relativePath);
+                    m_localMetadata.remove(file.relativePath);
                 }
                 Q_EMIT localStateChanged(localSignatures(), remotePaths());
                 m_deleteInProgress = false;
@@ -1200,6 +1229,7 @@ void GraphClient::deleteNextRemoteFile()
         } else {
             log(QStringLiteral("Graph sync: deleted remote %1").arg(file.relativePath));
             m_localSignatures.remove(file.relativePath);
+            m_localMetadata.remove(file.relativePath);
             m_remotePathsById.remove(file.itemId);
             m_remoteItemIds.remove(file.relativePath);
             m_pendingRemoteDeletePaths.remove(file.relativePath);
@@ -1304,6 +1334,7 @@ void GraphClient::startUpload(const GraphLocalFile &file)
         const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
         if (reply->error() != QNetworkReply::NoError) {
             m_localSignatures.remove(transfer->file.relativePath);
+            m_localMetadata.remove(transfer->file.relativePath);
             Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not upload local file: %1")
                                              .arg(transfer->file.relativePath)));
             m_activeUploads.remove(transfer->file.relativePath);
@@ -1437,6 +1468,9 @@ void GraphClient::finishUpload(const std::shared_ptr<UploadTransfer> &transfer,
     const QString signature = localFileSignature(transfer->file.localPath);
     if (!signature.isEmpty()) {
         m_localSignatures.insert(transfer->file.relativePath, signature);
+        const QFileInfo fileInfo(transfer->file.localPath);
+        m_localMetadata.insert(transfer->file.relativePath,
+                               {fileInfo.size(), fileInfo.lastModified()});
     }
     const QString remoteId = uploaded.value(QStringLiteral("id")).toString();
     if (!remoteId.isEmpty()) {

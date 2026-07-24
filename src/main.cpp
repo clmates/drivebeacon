@@ -2,6 +2,7 @@
 
 #include "onedrivecontroller.h"
 #include "profiledialog.h"
+#include "drivebeaconserviceclient.h"
 
 #include <KAboutData>
 #include <KAboutApplicationDialog>
@@ -69,7 +70,10 @@ int main(int argc, char *argv[])
 
     OneDriveController controller(commandLine.value(QStringLiteral("profile")),
                                   commandLine.value(QStringLiteral("backend")),
-                                  commandLine.value(QStringLiteral("local-directory")));
+                                  commandLine.value(QStringLiteral("local-directory")),
+                                  false);
+    DriveBeaconServiceClient serviceClient;
+    SystemdManager graphServiceManager(QStringLiteral("drivebeacon-service.service"));
     const QString trayId = QStringLiteral("drivebeacon-%1").arg(controller.profileName());
     KStatusNotifierItem tray(trayId);
     tray.setCategory(KStatusNotifierItem::SystemServices);
@@ -122,14 +126,34 @@ int main(int argc, char *argv[])
     // The tray host owns the popup surface and positions it next to the tray on Wayland.
     tray.setContextMenu(popupMenu);
     tray.setIsMenu(true);
-    QObject::connect(startAction, &QAction::triggered,
-                     &controller, &OneDriveController::startService);
-    QObject::connect(stopAction, &QAction::triggered,
-                     &controller, &OneDriveController::stopService);
-    QObject::connect(restartAction, &QAction::triggered,
-                     &controller, &OneDriveController::restartService);
-    QObject::connect(graphSyncAction, &QAction::triggered,
-                     &controller, &OneDriveController::synchronizeGraph);
+    QObject::connect(startAction, &QAction::triggered, &application, [&] {
+        if (controller.usesGraphService()) {
+            graphServiceManager.startService();
+        } else {
+            controller.startService();
+        }
+    });
+    QObject::connect(stopAction, &QAction::triggered, &application, [&] {
+        if (controller.usesGraphService()) {
+            graphServiceManager.stopService();
+        } else {
+            controller.stopService();
+        }
+    });
+    QObject::connect(restartAction, &QAction::triggered, &application, [&] {
+        if (controller.usesGraphService()) {
+            graphServiceManager.restartService();
+        } else {
+            controller.restartService();
+        }
+    });
+    QObject::connect(graphSyncAction, &QAction::triggered, &application, [&] {
+        if (serviceClient.available()) {
+            serviceClient.synchronizeGraph();
+        } else {
+            controller.synchronizeGraph();
+        }
+    });
     QObject::connect(clearActivityAction, &QAction::triggered,
                      controller.activities(), &ActivityModel::clear);
     QObject::connect(configurationAction, &QAction::triggered, &application, [&] {
@@ -233,20 +257,27 @@ int main(int argc, char *argv[])
 
     // Keep tray actions and attention state synchronized with the backend properties.
     const auto updateTray = [&] {
-        const bool running = controller.activeState() == QLatin1String("active");
+        const bool graphService = controller.usesGraphService();
+        const QString serviceState = graphService
+            ? graphServiceManager.activeState() : controller.activeState();
+        const bool running = serviceState == QLatin1String("active");
         statusAction->setText(i18n("Status: %1", controller.statusText()));
         directoryAction->setText(i18n("Local folder: %1", controller.syncDirectory()));
         remoteQuotaAction->setText(i18n("Remote storage: %1 used · %2 available · %3 total",
                                        formatBytes(controller.remoteQuotaUsed()),
                                        formatBytes(controller.remoteQuotaRemaining()),
                                        formatBytes(controller.remoteQuotaTotal())));
-        const bool serviceControl = controller.serviceControlAvailable();
-        graphSyncAction->setText(i18n("Graph sync: %1", controller.graphSyncStatus()));
-        graphSyncAction->setEnabled(!serviceControl && controller.graphAuthenticated());
+        const bool serviceControl = graphService || controller.serviceControlAvailable();
+        const QString syncStatus = serviceClient.available()
+            ? serviceClient.syncStatus() : controller.graphSyncStatus();
+        const bool authenticated = serviceClient.available()
+            ? serviceClient.graphAuthenticated() : controller.graphAuthenticated();
+        graphSyncAction->setText(i18n("Graph sync: %1", syncStatus));
+        graphSyncAction->setEnabled(!serviceControl && authenticated);
         startAction->setEnabled(serviceControl && !running);
         stopAction->setEnabled(serviceControl && running);
         restartAction->setEnabled(serviceControl && running);
-        tray.setStatus(controller.activeState() == QLatin1String("failed")
+        tray.setStatus(serviceState == QLatin1String("failed")
                            ? KStatusNotifierItem::NeedsAttention
                            : running ? KStatusNotifierItem::Active
                                      : KStatusNotifierItem::Passive);
@@ -254,6 +285,8 @@ int main(int argc, char *argv[])
                         controller.statusText());
     };
     QObject::connect(&controller, &OneDriveController::stateChanged, &application, updateTray);
+    QObject::connect(&graphServiceManager, &SystemdManager::stateChanged,
+                     &application, updateTray);
     QObject::connect(&controller, &OneDriveController::remoteQuotaChanged,
                      &application, updateTray);
     QObject::connect(&controller, &OneDriveController::profileChanged,
@@ -261,6 +294,10 @@ int main(int argc, char *argv[])
     QObject::connect(&controller, &OneDriveController::graphAuthChanged,
                      &application, updateTray);
     QObject::connect(&controller, &OneDriveController::graphSyncChanged,
+                     &application, updateTray);
+    QObject::connect(&serviceClient, &DriveBeaconServiceClient::availabilityChanged,
+                     &application, updateTray);
+    QObject::connect(&serviceClient, &DriveBeaconServiceClient::statusChanged,
                      &application, updateTray);
     updateTray();
 

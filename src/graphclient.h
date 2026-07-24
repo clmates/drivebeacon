@@ -10,6 +10,7 @@
 #include <QObject>
 #include <QQueue>
 #include <QHash>
+#include <QDateTime>
 #include <QTimer>
 #include <QSet>
 
@@ -213,6 +214,11 @@ private:
     QHash<QString, QString> m_remoteEtags;
     /** SHA-256 signatures of local files at the last persisted baseline. */
     QHash<QString, QString> m_localSignatures;
+    /**
+     * Metadata used to skip hashing files whose size and modification time
+     * are unchanged since the previous local scan.
+     */
+    QHash<QString, QPair<qint64, QDateTime>> m_localMetadata;
     /** Local polling and remote delta polling timers. */
     QTimer m_uploadTimer;
     QTimer m_remoteTimer;

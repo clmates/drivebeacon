@@ -17,7 +17,9 @@ int main(int argc, char *argv[])
     QCoreApplication application(argc, argv);
     application.setOrganizationDomain(QStringLiteral("io.github.clmates"));
     application.setOrganizationName(QStringLiteral("clmates"));
-    application.setApplicationName(QStringLiteral("drivebeacon-service"));
+    // Keep QSettings aligned with the tray so both processes read the same
+    // profiles/active entry and Graph baselines.
+    application.setApplicationName(QStringLiteral("drivebeacon"));
 
     QCommandLineParser parser;
     parser.addHelpOption();

@@ -46,6 +46,7 @@ public:
     explicit OneDriveController(const QString &profileName = {},
                                 const QString &backendOverride = {},
                                 const QString &directoryOverride = {},
+                                bool autoStartGraphSync = true,
                                 QObject *parent = nullptr);
 
     /** Returns the model containing recent OneDrive activity. */
@@ -64,6 +65,8 @@ public:
     [[nodiscard]] QString backendName() const;
     /** Returns the name of the isolated profile loaded by this process. */
     [[nodiscard]] QString profileName() const;
+    /** Returns whether this profile uses the headless Graph service. */
+    [[nodiscard]] bool usesGraphService() const;
     /** Returns the persistent profile store used by the configuration dialog. */
     [[nodiscard]] ProfileStore *profileStore();
     /** Returns the configured local availability policy. */
@@ -173,4 +176,6 @@ private:
     QStringList m_graphRemoteFolders;
     QString m_legacyDirectory;
     bool m_legacyMigrationPending = false;
+    /** Tray clients keep this false while the headless service owns Graph sync. */
+    bool m_autoStartGraphSync = true;
 };

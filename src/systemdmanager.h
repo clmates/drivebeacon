@@ -15,7 +15,8 @@ class SystemdManager final : public QObject
 
 public:
     /** Creates the manager and starts periodic service-state polling. */
-    explicit SystemdManager(QObject *parent = nullptr);
+    explicit SystemdManager(const QString &unitName = QStringLiteral("onedrive.service"),
+                            QObject *parent = nullptr);
 
     /** Returns systemd's high-level service state. */
     [[nodiscard]] QString activeState() const;
@@ -49,4 +50,6 @@ private:
     QString m_subState;
     QString m_errorMessage;
     QTimer m_refreshTimer;
+    /** Unit controlled by this manager; Graph and legacy backends differ. */
+    QString m_unitName;
 };

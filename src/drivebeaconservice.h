@@ -18,6 +18,7 @@ class DriveBeaconService final : public QObject
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "io.github.clmates.DriveBeacon1")
     Q_PROPERTY(QString profileName READ profileName CONSTANT)
+    Q_PROPERTY(QString backendName READ backendName CONSTANT)
     Q_PROPERTY(QString syncStatus READ syncStatus NOTIFY statusChanged)
     Q_PROPERTY(int syncProgress READ syncProgress NOTIFY statusChanged)
     Q_PROPERTY(bool graphAuthenticated READ graphAuthenticated NOTIFY statusChanged)
@@ -28,6 +29,7 @@ public:
     explicit DriveBeaconService(const QString &profileName, QObject *parent = nullptr);
 
     [[nodiscard]] QString profileName() const;
+    [[nodiscard]] QString backendName() const;
     [[nodiscard]] QString syncStatus() const;
     [[nodiscard]] int syncProgress() const;
     [[nodiscard]] bool graphAuthenticated() const;

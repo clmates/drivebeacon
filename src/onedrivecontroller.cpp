@@ -33,6 +33,7 @@ void journalGraphError(const QString &message)
 OneDriveController::OneDriveController(const QString &profileName,
                                        const QString &backendOverride,
                                        const QString &directoryOverride,
+                                       bool autoStartGraphSync,
                                        QObject *parent)
     : QObject(parent)
     , m_profileStore(this)
@@ -40,6 +41,7 @@ OneDriveController::OneDriveController(const QString &profileName,
     , m_graphAuth(this)
     , m_graphClient(this)
     , m_syncDirectory(m_profile.localDirectory)
+    , m_autoStartGraphSync(autoStartGraphSync)
 {
     if (!backendOverride.isEmpty()) {
         m_profile.backend = syncBackendFromName(backendOverride);
@@ -129,9 +131,9 @@ OneDriveController::OneDriveController(const QString &profileName,
                     m_graphRemoteFolders.append(folder.name);
                 }
                 Q_EMIT graphRemoteFoldersChanged();
-                if (m_profile.graphDeltaLink.isEmpty()
+                if (m_autoStartGraphSync && (m_profile.graphDeltaLink.isEmpty()
                     || m_profile.graphLocalSignatures.isEmpty()
-                    || m_profile.graphRemotePaths.isEmpty()) {
+                    || m_profile.graphRemotePaths.isEmpty())) {
                     synchronizeGraph();
                 } else if (m_profile.graphSyncedIncludedFolders != m_profile.includedFolders
                            || m_profile.graphSyncedExcludedFolders != m_profile.excludedFolders) {
@@ -274,10 +276,11 @@ OneDriveController::OneDriveController(const QString &profileName,
             OAuthTokens storedTokens;
             QString walletError;
             if (!TokenStore::load(m_profile.name, &storedTokens, &walletError)) {
-                if (!walletError.isEmpty()) {
-                    m_graphErrorMessage = walletError;
-                    Q_EMIT graphAuthChanged();
-                }
+                m_graphErrorMessage = walletError.isEmpty()
+                    ? QStringLiteral("No stored Microsoft Graph credentials for profile '%1'.")
+                          .arg(m_profile.name)
+                    : walletError;
+                Q_EMIT graphAuthChanged();
                 return;
             }
             m_graphAuth.refresh(m_profile.graphClientId, storedTokens.refreshToken);
@@ -330,7 +333,13 @@ QString OneDriveController::statusText() const
 
 QString OneDriveController::errorMessage() const
 {
-    return !m_journalError.isEmpty() ? m_journalError : m_systemdManager.errorMessage();
+    if (!m_journalError.isEmpty()) {
+        return m_journalError;
+    }
+    if (!m_graphErrorMessage.isEmpty()) {
+        return m_graphErrorMessage;
+    }
+    return m_systemdManager.errorMessage();
 }
 
 QString OneDriveController::syncDirectory() const
@@ -346,6 +355,11 @@ QString OneDriveController::backendName() const
 QString OneDriveController::profileName() const
 {
     return m_profile.name;
+}
+
+bool OneDriveController::usesGraphService() const
+{
+    return m_profile.backend == SyncBackend::MicrosoftGraph;
 }
 
 ProfileStore *OneDriveController::profileStore()
