@@ -99,6 +99,7 @@ tray. It uses the active profile from the shared DriveBeacon configuration:
 drivebeaconctl status
 drivebeaconctl sync
 drivebeaconctl refresh-folders
+drivebeaconctl reload-profiles       # discover profiles saved after service start
 drivebeaconctl pause                 # pause all Graph accounts
 drivebeaconctl resume                # resume all Graph accounts
 drivebeaconctl pause-profile NAME    # pause one account

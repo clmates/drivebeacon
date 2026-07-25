@@ -64,6 +64,21 @@ QString DriveBeaconServiceClient::errorMessage() const
     return m_errorMessage;
 }
 
+QString DriveBeaconServiceClient::primaryProfileName() const
+{
+    return m_primaryProfileName;
+}
+
+QStringList DriveBeaconServiceClient::graphProfiles() const
+{
+    return m_graphProfiles;
+}
+
+QVariantMap DriveBeaconServiceClient::profileStatus(const QString &profileName) const
+{
+    return m_profileStatuses.value(profileName);
+}
+
 bool DriveBeaconServiceClient::graphSyncEnabled() const
 {
     return m_graphSyncEnabled;
@@ -87,9 +102,13 @@ void DriveBeaconServiceClient::refresh()
         m_syncProgress = 0;
         m_graphAuthenticated = false;
         m_errorMessage.clear();
+        m_primaryProfileName.clear();
         m_graphSyncEnabled = false;
         m_globalSyncEnabled = true;
+        m_graphProfiles.clear();
+        m_profileStatuses.clear();
         Q_EMIT statusChanged();
+        Q_EMIT profilesChanged();
         return;
     }
 
@@ -126,6 +145,16 @@ void DriveBeaconServiceClient::setProfileSyncEnabled(const QString &profileName,
 void DriveBeaconServiceClient::setGlobalSyncEnabled(bool enabled)
 {
     call(QStringLiteral("setGlobalSyncEnabled"), {enabled});
+}
+
+void DriveBeaconServiceClient::reloadProfiles()
+{
+    call(QStringLiteral("reloadProfiles"));
+}
+
+void DriveBeaconServiceClient::setPrimaryProfile(const QString &profileName)
+{
+    call(QStringLiteral("setPrimaryProfile"), {profileName});
 }
 
 void DriveBeaconServiceClient::onRemoteStatusChanged()
@@ -165,10 +194,14 @@ void DriveBeaconServiceClient::applyProperties(const QVariantMap &properties)
     const QString error = properties.value(QStringLiteral("errorMessage")).toString();
     const bool syncEnabled = properties.value(QStringLiteral("graphSyncEnabled")).toBool();
     const bool globalSyncEnabled = properties.value(QStringLiteral("globalSyncEnabled")).toBool();
+    const QStringList profiles = properties.value(QStringLiteral("graphProfiles")).toStringList();
+    const QString primaryProfileName = properties.value(QStringLiteral("profileName")).toString();
     if (status == m_syncStatus && progress == m_syncProgress
         && authenticated == m_graphAuthenticated && error == m_errorMessage
         && syncEnabled == m_graphSyncEnabled
-        && globalSyncEnabled == m_globalSyncEnabled) {
+        && globalSyncEnabled == m_globalSyncEnabled && profiles == m_graphProfiles
+        && primaryProfileName == m_primaryProfileName) {
+        refreshProfileStatuses();
         return;
     }
     m_syncStatus = status;
@@ -177,5 +210,34 @@ void DriveBeaconServiceClient::applyProperties(const QVariantMap &properties)
     m_errorMessage = error;
     m_graphSyncEnabled = syncEnabled;
     m_globalSyncEnabled = globalSyncEnabled;
+    m_primaryProfileName = primaryProfileName;
+    if (profiles != m_graphProfiles) {
+        m_graphProfiles = profiles;
+        m_profileStatuses.clear();
+        Q_EMIT profilesChanged();
+    }
     Q_EMIT statusChanged();
+    refreshProfileStatuses();
+}
+
+void DriveBeaconServiceClient::refreshProfileStatuses()
+{
+    if (!m_available) {
+        return;
+    }
+    QDBusInterface service(serviceName, objectPath, interfaceName,
+                           QDBusConnection::sessionBus());
+    for (const QString &profile : m_graphProfiles) {
+        auto *watcher = new QDBusPendingCallWatcher(
+            service.asyncCall(QStringLiteral("profileStatus"), profile), this);
+        connect(watcher, &QDBusPendingCallWatcher::finished, this,
+                [this, watcher, profile] {
+                    const QDBusPendingReply<QVariantMap> reply = *watcher;
+                    if (!reply.isError()) {
+                        m_profileStatuses.insert(profile, reply.value());
+                        Q_EMIT profilesChanged();
+                    }
+                    watcher->deleteLater();
+                });
+    }
 }

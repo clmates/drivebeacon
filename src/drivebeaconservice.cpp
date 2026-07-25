@@ -3,17 +3,31 @@
 #include "drivebeaconservice.h"
 
 #include <algorithm>
+#include <QSet>
 
 DriveBeaconService::DriveBeaconService(const QString &profileName, QObject *parent)
     : QObject(parent)
     , m_profileStore(this)
     , m_activeProfileName(profileName.isEmpty() ? m_profileStore.activeProfileName()
                                                  : profileName)
+    , m_requestedProfileName(profileName)
+{
+    reloadProfiles();
+}
+
+void DriveBeaconService::reloadProfiles()
 {
     const bool globallyEnabled = m_profileStore.globalSyncEnabled();
-    for (const QString &name : m_profileStore.profileNames()) {
+    const QStringList configuredProfileNames = m_profileStore.profileNames();
+    const QSet<QString> configuredProfiles = QSet<QString>(
+        configuredProfileNames.cbegin(), configuredProfileNames.cend());
+    for (const QString &name : configuredProfiles) {
         const SyncProfile profile = m_profileStore.load(name);
         if (profile.backend != SyncBackend::MicrosoftGraph) {
+            continue;
+        }
+        if (m_controllers.contains(name)) {
+            m_controllers.value(name)->setGlobalGraphSyncEnabled(globallyEnabled);
             continue;
         }
         // A paused profile remains configured and keeps its persisted state;
@@ -35,6 +49,10 @@ DriveBeaconService::DriveBeaconService(const QString &profileName, QObject *pare
         connect(controller, &OneDriveController::errorMessageChanged,
                 this, &DriveBeaconService::publishStatus);
     }
+    if (m_requestedProfileName.isEmpty()) {
+        m_activeProfileName = m_profileStore.activeProfileName();
+    }
+    Q_EMIT statusChanged();
 }
 
 OneDriveController *DriveBeaconService::activeController() const
@@ -74,6 +92,10 @@ QVariantMap DriveBeaconService::profileStatus(const QString &profileName) const
     status.insert(QStringLiteral("syncEnabled"), controller->graphSyncEnabled());
     status.insert(QStringLiteral("syncStatus"), controller->graphSyncStatus());
     status.insert(QStringLiteral("syncProgress"), controller->graphSyncProgress());
+    status.insert(QStringLiteral("localDirectory"), controller->syncDirectory());
+    status.insert(QStringLiteral("quotaTotal"), controller->remoteQuotaTotal());
+    status.insert(QStringLiteral("quotaUsed"), controller->remoteQuotaUsed());
+    status.insert(QStringLiteral("quotaRemaining"), controller->remoteQuotaRemaining());
     status.insert(QStringLiteral("error"), controller->errorMessage());
     return status;
 }
@@ -137,6 +159,20 @@ void DriveBeaconService::setGlobalSyncEnabled(bool enabled)
         controller->setGlobalGraphSyncEnabled(enabled);
     }
     publishStatus();
+}
+
+void DriveBeaconService::setPrimaryProfile(const QString &profileName)
+{
+    const QString name = profileName.trimmed();
+    if (!m_controllers.contains(name)) {
+        return;
+    }
+    // The primary account is a presentation preference, not a synchronization
+    // switch; changing it must not restart controllers or reset their state.
+    m_activeProfileName = name;
+    m_requestedProfileName.clear();
+    m_profileStore.setActiveProfileName(name);
+    Q_EMIT statusChanged();
 }
 
 void DriveBeaconService::startLegacyService()

@@ -140,8 +140,9 @@ int main(int argc, char *argv[])
     parser.addVersionOption();
     parser.addPositionalArgument(
         QStringLiteral("command"),
-        QStringLiteral("status, sync, refresh-folders, pause, resume, pause-profile <name>, "
-                       "resume-profile <name>, or service <start|stop|restart>"));
+        QStringLiteral("status, sync, refresh-folders, reload-profiles, pause, resume, "
+                       "pause-profile <name>, resume-profile <name>, or service "
+                       "<start|stop|restart>"));
     parser.process(application);
 
     const QStringList arguments = parser.positionalArguments();
@@ -157,6 +158,9 @@ int main(int argc, char *argv[])
     }
     if (command == QStringLiteral("refresh-folders") && arguments.size() == 1) {
         return callServiceMethod(QStringLiteral("refreshGraphFolders"));
+    }
+    if (command == QStringLiteral("reload-profiles") && arguments.size() == 1) {
+        return callServiceMethod(QStringLiteral("reloadProfiles"));
     }
     if (command == QStringLiteral("pause") && arguments.size() == 1) {
         return callServiceMethod(QStringLiteral("setGlobalSyncEnabled"), {false});

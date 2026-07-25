@@ -19,7 +19,7 @@ class DriveBeaconService final : public QObject
 {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "io.github.clmates.DriveBeacon1")
-    Q_PROPERTY(QString profileName READ profileName CONSTANT)
+    Q_PROPERTY(QString profileName READ profileName NOTIFY statusChanged)
     Q_PROPERTY(QString backendName READ backendName CONSTANT)
     /** Names of all Graph profiles loaded by this service instance. */
     Q_PROPERTY(QStringList graphProfiles READ graphProfiles NOTIFY statusChanged)
@@ -56,6 +56,10 @@ public Q_SLOTS:
     void setProfileSyncEnabled(const QString &profileName, bool enabled);
     /** Pauses or resumes all Graph profiles while preserving their own flags. */
     void setGlobalSyncEnabled(bool enabled);
+    /** Discovers newly saved Graph profiles without restarting the service. */
+    void reloadProfiles();
+    /** Persists the account whose summary is shown in the tray header. */
+    void setPrimaryProfile(const QString &profileName);
     /** Returns status fields for one loaded profile for CLI and tray clients. */
     Q_INVOKABLE QVariantMap profileStatus(const QString &profileName) const;
     /** Controls the legacy onedrive.service through the existing manager. */
@@ -78,4 +82,6 @@ private:
     ProfileStore m_profileStore;
     QHash<QString, OneDriveController *> m_controllers;
     QString m_activeProfileName;
+    /** Optional command-line profile override retained across reloads. */
+    QString m_requestedProfileName;
 };

@@ -19,6 +19,7 @@
 #include <QInputDialog>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QVariantMap>
 
 namespace {
 /** Formats byte counts for the tray without exposing provider-specific units. */
@@ -102,14 +103,17 @@ int main(int argc, char *argv[])
     QAction *restartAction = new QAction(i18n("Restart synchronization"), &application);
     QAction *pauseProfileAction = new QAction(&application);
     QAction *pauseAllAction = new QAction(&application);
+    QAction *reloadProfilesAction = new QAction(i18n("Reload accounts"), &application);
     QAction *configurationAction = new QAction(i18n("Configure profiles…"), &application);
     QAction *aboutAction = new QAction(i18n("About DriveBeacon"), &application);
 
     auto *popupMenu = new QMenu;
+    auto *accountsMenu = new QMenu(i18n("Accounts"), popupMenu);
     popupMenu->addAction(statusAction);
     popupMenu->addAction(directoryAction);
     popupMenu->addAction(remoteQuotaAction);
     popupMenu->addAction(graphSyncAction);
+    popupMenu->addMenu(accountsMenu);
     popupMenu->addSeparator();
     popupMenu->addAction(activityHeader);
     popupMenu->addAction(emptyActivityAction);
@@ -162,6 +166,9 @@ int main(int argc, char *argv[])
         if (serviceClient.available() && controller.usesGraphService()) {
             serviceClient.setGlobalSyncEnabled(!serviceClient.globalSyncEnabled());
         }
+    });
+    QObject::connect(reloadProfilesAction, &QAction::triggered, &application, [&] {
+        serviceClient.reloadProfiles();
     });
     QObject::connect(graphSyncAction, &QAction::triggered, &application, [&] {
         if (serviceClient.available()) {
@@ -262,6 +269,60 @@ int main(int argc, char *argv[])
                      &application, rebuildActivities);
     rebuildActivities();
 
+    const auto rebuildAccounts = [&] {
+        accountsMenu->clear();
+        if (!serviceClient.available()) {
+            QAction *unavailable = accountsMenu->addAction(i18n("Service unavailable"));
+            unavailable->setEnabled(false);
+        } else if (serviceClient.graphProfiles().isEmpty()) {
+            QAction *empty = accountsMenu->addAction(i18n("No Graph accounts loaded"));
+            empty->setEnabled(false);
+        } else {
+            for (const QString &profile : serviceClient.graphProfiles()) {
+                const QVariantMap status = serviceClient.profileStatus(profile);
+                auto *accountMenu = accountsMenu->addMenu(profile);
+                if (status.isEmpty()) {
+                    QAction *loading = accountMenu->addAction(i18n("Loading account status…"));
+                    loading->setEnabled(false);
+                    continue;
+                }
+
+                const bool authenticated = status.value(QStringLiteral("authenticated")).toBool();
+                const QString syncStatus = status.value(QStringLiteral("syncStatus")).toString();
+                const int progress = status.value(QStringLiteral("syncProgress")).toInt();
+                QAction *connection = accountMenu->addAction(
+                    authenticated ? i18n("Connected") : i18n("Not connected"));
+                connection->setEnabled(false);
+                QAction *sync = accountMenu->addAction(
+                    i18n("Sync: %1 (%2%)", syncStatus, progress));
+                sync->setEnabled(false);
+                QAction *local = accountMenu->addAction(
+                    i18n("Local folder: %1",
+                         status.value(QStringLiteral("localDirectory")).toString()));
+                local->setEnabled(false);
+                QAction *remote = accountMenu->addAction(
+                    i18n("Remote storage: %1 used · %2 available · %3 total",
+                         formatBytes(status.value(QStringLiteral("quotaUsed")).toLongLong()),
+                         formatBytes(status.value(QStringLiteral("quotaRemaining")).toLongLong()),
+                         formatBytes(status.value(QStringLiteral("quotaTotal")).toLongLong())));
+                remote->setEnabled(false);
+
+                if (profile == serviceClient.primaryProfileName()) {
+                    QAction *primary = accountMenu->addAction(i18n("Primary account"));
+                    primary->setEnabled(false);
+                } else {
+                    QAction *makePrimary = accountMenu->addAction(i18n("Use as primary account"));
+                    QObject::connect(makePrimary, &QAction::triggered, &application,
+                                     [&serviceClient, profile] {
+                                         serviceClient.setPrimaryProfile(profile);
+                                     });
+                }
+            }
+        }
+        accountsMenu->addSeparator();
+        accountsMenu->addAction(reloadProfilesAction);
+    };
+
     KAboutApplicationDialog aboutDialog(aboutData);
     QObject::connect(aboutAction, &QAction::triggered, &aboutDialog, [&aboutDialog] {
         aboutDialog.show();
@@ -277,12 +338,29 @@ int main(int argc, char *argv[])
         const QString serviceState = graphService
             ? graphServiceManager.activeState() : controller.activeState();
         const bool running = serviceState == QLatin1String("active");
-        statusAction->setText(i18n("Status: %1", controller.statusText()));
-        directoryAction->setText(i18n("Local folder: %1", controller.syncDirectory()));
-        remoteQuotaAction->setText(i18n("Remote storage: %1 used · %2 available · %3 total",
-                                       formatBytes(controller.remoteQuotaUsed()),
-                                       formatBytes(controller.remoteQuotaRemaining()),
-                                       formatBytes(controller.remoteQuotaTotal())));
+        const QString primaryProfile = serviceClient.primaryProfileName();
+        const QVariantMap primaryStatus = serviceClient.profileStatus(primaryProfile);
+        const bool hasPrimaryStatus = serviceClient.available() && !primaryStatus.isEmpty();
+        const QString displayedStatus = hasPrimaryStatus
+            ? primaryStatus.value(QStringLiteral("syncStatus")).toString()
+            : controller.statusText();
+        const QString displayedDirectory = hasPrimaryStatus
+            ? primaryStatus.value(QStringLiteral("localDirectory")).toString()
+            : controller.syncDirectory();
+        statusAction->setText(hasPrimaryStatus
+                                  ? i18n("Primary account: %1 · %2", primaryProfile, displayedStatus)
+                                  : i18n("Status: %1", displayedStatus));
+        directoryAction->setText(i18n("Local folder: %1", displayedDirectory));
+        remoteQuotaAction->setText(
+            hasPrimaryStatus
+                ? i18n("Remote storage: %1 used · %2 available · %3 total",
+                       formatBytes(primaryStatus.value(QStringLiteral("quotaUsed")).toLongLong()),
+                       formatBytes(primaryStatus.value(QStringLiteral("quotaRemaining")).toLongLong()),
+                       formatBytes(primaryStatus.value(QStringLiteral("quotaTotal")).toLongLong()))
+                : i18n("Remote storage: %1 used · %2 available · %3 total",
+                       formatBytes(controller.remoteQuotaUsed()),
+                       formatBytes(controller.remoteQuotaRemaining()),
+                       formatBytes(controller.remoteQuotaTotal())));
         const bool serviceControl = graphService || controller.serviceControlAvailable();
         const QString syncStatus = serviceClient.available()
             ? serviceClient.syncStatus() : controller.graphSyncStatus();
@@ -355,8 +433,14 @@ int main(int argc, char *argv[])
                      });
     QObject::connect(&serviceClient, &DriveBeaconServiceClient::availabilityChanged,
                      &application, updateTray);
+    QObject::connect(&serviceClient, &DriveBeaconServiceClient::profilesChanged,
+                     &application, rebuildAccounts);
     QObject::connect(&serviceClient, &DriveBeaconServiceClient::statusChanged,
-                     &application, updateTray);
+                     &application, [&] {
+                         rebuildAccounts();
+                         updateTray();
+                     });
+    rebuildAccounts();
     updateTray();
 
     return application.exec();
