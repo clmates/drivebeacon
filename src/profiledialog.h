@@ -6,6 +6,7 @@
 
 class QListWidget;
 class QComboBox;
+class QCheckBox;
 class QLineEdit;
 class QLabel;
 class QPushButton;
@@ -66,6 +67,8 @@ private:
     QComboBox *m_backendCombo;
     QLineEdit *m_directoryEdit;
     QComboBox *m_availabilityCombo;
+    QCheckBox *m_syncEnabledCheck;
+    QCheckBox *m_globalSyncEnabledCheck;
     QTreeWidget *m_folderTree;
     QPushButton *m_refreshFoldersButton;
     QSpinBox *m_remoteIntervalSpin;
@@ -73,6 +76,7 @@ private:
     QSpinBox *m_concurrentUploadsSpin;
     QSpinBox *m_concurrentLargeTransfersSpin;
     QLineEdit *m_clientIdEdit;
+    QPushButton *m_clientIdHelpButton;
     QLineEdit *m_driveIdEdit;
     QLabel *m_graphStatusLabel;
     QLabel *m_verificationLabel;

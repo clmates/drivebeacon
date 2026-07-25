@@ -394,14 +394,30 @@ void GraphClient::startRemoteMonitoring(const QString &driveId, const QString &a
 {
     // This path is also used after restoring persisted state, without calling
     // synchronize(); keep all Graph operations supplied with the active drive
-    // and bearer token in that case too.
+    // and bearer token in that case too. This also resumes any work that was
+    // queued when a profile was paused.
     m_syncDriveId = driveId;
     m_syncToken = accessToken;
     m_deltaDriveId = driveId;
     m_deltaToken = accessToken;
     m_deltaLink = deltaLink;
+    m_monitoringEnabled = true;
     m_remoteTimer.setInterval(qBound(10, intervalSeconds, 3600) * 1000);
     m_remoteTimer.start();
+    m_uploadTimer.start();
+    // A pause can occur while a page still has queued work. Re-enable the
+    // schedulers so that resuming continues that page before polling again.
+    startPendingDownloads();
+    startPendingUploads();
+}
+
+void GraphClient::stopMonitoring()
+{
+    // Stopping only the polling sources is intentional: persisted cursors and
+    // in-memory identity maps must survive a temporary account pause.
+    m_monitoringEnabled = false;
+    m_uploadTimer.stop();
+    m_remoteTimer.stop();
 }
 
 void GraphClient::configureTransferConcurrency(int downloads, int uploads, int largeTransfers)
@@ -462,7 +478,9 @@ void GraphClient::initializeLocalMonitoring(const QStringList &signatures,
             }
         }
     }
-    m_uploadTimer.start();
+    if (m_monitoringEnabled) {
+        m_uploadTimer.start();
+    }
 }
 
 QStringList GraphClient::localSignatures() const
@@ -845,7 +863,7 @@ void GraphClient::processNextFile()
         Q_EMIT syncProgress(100, {});
         Q_EMIT syncFinished();
         Q_EMIT localStateChanged(localSignatures(), remotePaths());
-        if (!m_uploadTimer.isActive()) {
+        if (m_monitoringEnabled && !m_uploadTimer.isActive()) {
             scanLocalChanges();
             m_uploadTimer.start();
         }
@@ -855,6 +873,9 @@ void GraphClient::processNextFile()
 
 void GraphClient::startPendingDownloads()
 {
+    if (!m_monitoringEnabled) {
+        return;
+    }
     // Small files may pass a queued video, while large transfers have a
     // separate cap so one video cannot occupy every download slot.
     while (m_activeDownloads.size() < m_maxConcurrentDownloads && !m_pendingFiles.isEmpty()) {
@@ -1254,6 +1275,9 @@ void GraphClient::uploadNextLocalFile()
 
 void GraphClient::startPendingUploads()
 {
+    if (!m_monitoringEnabled) {
+        return;
+    }
     if (!m_pendingUploads.isEmpty()) {
         m_uploadBatchActive = true;
     }

@@ -3,6 +3,7 @@
 #pragma once
 
 #include <QObject>
+#include <QVariantList>
 
 /**
  * Client-side proxy for the headless DriveBeacon D-Bus service.
@@ -18,6 +19,10 @@ class DriveBeaconServiceClient final : public QObject
     Q_PROPERTY(int syncProgress READ syncProgress NOTIFY statusChanged)
     Q_PROPERTY(bool graphAuthenticated READ graphAuthenticated NOTIFY statusChanged)
     Q_PROPERTY(QString errorMessage READ errorMessage NOTIFY statusChanged)
+    /** Cached pause state of the active service profile. */
+    Q_PROPERTY(bool graphSyncEnabled READ graphSyncEnabled NOTIFY statusChanged)
+    /** Cached global pause state reported by the service. */
+    Q_PROPERTY(bool globalSyncEnabled READ globalSyncEnabled NOTIFY statusChanged)
 
 public:
     /** Creates a proxy and begins watching the well-known service name. */
@@ -28,6 +33,8 @@ public:
     [[nodiscard]] int syncProgress() const;
     [[nodiscard]] bool graphAuthenticated() const;
     [[nodiscard]] QString errorMessage() const;
+    [[nodiscard]] bool graphSyncEnabled() const;
+    [[nodiscard]] bool globalSyncEnabled() const;
 
 public Q_SLOTS:
     /** Refreshes service availability and all exposed status properties. */
@@ -36,6 +43,10 @@ public Q_SLOTS:
     void synchronizeGraph();
     /** Requests a non-destructive remote folder refresh. */
     void refreshGraphFolders();
+    /** Pauses or resumes one named profile through the service. */
+    void setProfileSyncEnabled(const QString &profileName, bool enabled);
+    /** Pauses or resumes all profiles through the service. */
+    void setGlobalSyncEnabled(bool enabled);
 
 Q_SIGNALS:
     /** Emitted when the service appears or disappears from the session bus. */
@@ -50,8 +61,8 @@ private Q_SLOTS:
     void onRemoteStatusChanged();
 
 private:
-    /** Calls one no-argument service method and reports D-Bus errors. */
-    void call(const QString &method);
+    /** Calls a service method and reports D-Bus errors to the tray. */
+    void call(const QString &method, const QVariantList &arguments = {});
     /** Updates cached properties from a GetAll reply. */
     void applyProperties(const QVariantMap &properties);
 
@@ -60,4 +71,6 @@ private:
     int m_syncProgress = 0;
     bool m_graphAuthenticated = false;
     QString m_errorMessage;
+    bool m_graphSyncEnabled = false;
+    bool m_globalSyncEnabled = true;
 };

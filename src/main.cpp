@@ -99,6 +99,8 @@ int main(int argc, char *argv[])
     QAction *startAction = new QAction(i18n("Start synchronization"), &application);
     QAction *stopAction = new QAction(i18n("Stop synchronization"), &application);
     QAction *restartAction = new QAction(i18n("Restart synchronization"), &application);
+    QAction *pauseProfileAction = new QAction(&application);
+    QAction *pauseAllAction = new QAction(&application);
     QAction *configurationAction = new QAction(i18n("Configure profiles…"), &application);
     QAction *aboutAction = new QAction(i18n("About DriveBeacon"), &application);
 
@@ -117,6 +119,8 @@ int main(int argc, char *argv[])
         menu->addAction(startAction);
         menu->addAction(stopAction);
         menu->addAction(restartAction);
+        menu->addAction(pauseProfileAction);
+        menu->addAction(pauseAllAction);
         menu->addSeparator();
         menu->addAction(configurationAction);
         menu->addAction(aboutAction);
@@ -145,6 +149,17 @@ int main(int argc, char *argv[])
             graphServiceManager.restartService();
         } else {
             controller.restartService();
+        }
+    });
+    QObject::connect(pauseProfileAction, &QAction::triggered, &application, [&] {
+        if (serviceClient.available() && controller.usesGraphService()) {
+            serviceClient.setProfileSyncEnabled(
+                controller.profileName(), !serviceClient.graphSyncEnabled());
+        }
+    });
+    QObject::connect(pauseAllAction, &QAction::triggered, &application, [&] {
+        if (serviceClient.available() && controller.usesGraphService()) {
+            serviceClient.setGlobalSyncEnabled(!serviceClient.globalSyncEnabled());
         }
     });
     QObject::connect(graphSyncAction, &QAction::triggered, &application, [&] {
@@ -274,6 +289,15 @@ int main(int argc, char *argv[])
             ? serviceClient.graphAuthenticated() : controller.graphAuthenticated();
         graphSyncAction->setText(i18n("Graph sync: %1", syncStatus));
         graphSyncAction->setEnabled(!serviceControl && authenticated);
+        const bool serviceAvailable = serviceClient.available() && graphService;
+        pauseProfileAction->setText(serviceClient.graphSyncEnabled()
+                                         ? i18n("Pause current account")
+                                         : i18n("Resume current account"));
+        pauseAllAction->setText(serviceClient.globalSyncEnabled()
+                                    ? i18n("Pause all accounts")
+                                    : i18n("Resume all accounts"));
+        pauseProfileAction->setEnabled(serviceAvailable);
+        pauseAllAction->setEnabled(serviceAvailable);
         startAction->setEnabled(serviceControl && !running);
         stopAction->setEnabled(serviceControl && running);
         restartAction->setEnabled(serviceControl && running);

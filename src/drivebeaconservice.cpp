@@ -4,71 +4,128 @@
 
 DriveBeaconService::DriveBeaconService(const QString &profileName, QObject *parent)
     : QObject(parent)
-    , m_controller(profileName, {}, {}, true, this)
+    , m_profileStore(this)
+    , m_activeProfileName(profileName.isEmpty() ? m_profileStore.activeProfileName()
+                                                 : profileName)
 {
-    connect(&m_controller, &OneDriveController::graphSyncChanged,
-            this, &DriveBeaconService::publishStatus);
-    connect(&m_controller, &OneDriveController::graphAuthChanged,
-            this, &DriveBeaconService::publishStatus);
-    connect(&m_controller, &OneDriveController::logMessage,
-            this, &DriveBeaconService::activityMessage);
-    connect(&m_controller, &OneDriveController::errorMessageChanged,
-            this, &DriveBeaconService::publishStatus);
+    const bool globallyEnabled = m_profileStore.globalSyncEnabled();
+    for (const QString &name : m_profileStore.profileNames()) {
+        const SyncProfile profile = m_profileStore.load(name);
+        if (profile.backend != SyncBackend::MicrosoftGraph) {
+            continue;
+        }
+        // A paused profile remains configured and keeps its persisted state;
+        // its controller still owns authentication, but its Graph polling and
+        // transfer schedulers remain stopped until the profile is resumed.
+        auto *controller = new OneDriveController(name, {}, {}, true, false, this);
+        controller->setGlobalGraphSyncEnabled(globallyEnabled);
+        m_controllers.insert(name, controller);
+        connect(controller, &OneDriveController::graphSyncChanged,
+                this, &DriveBeaconService::publishStatus);
+        connect(controller, &OneDriveController::graphAuthChanged,
+                this, &DriveBeaconService::publishStatus);
+        connect(controller, &OneDriveController::logMessage,
+                this, &DriveBeaconService::activityMessage);
+        connect(controller, &OneDriveController::errorMessageChanged,
+                this, &DriveBeaconService::publishStatus);
+    }
+}
+
+OneDriveController *DriveBeaconService::activeController() const
+{
+    return m_controllers.value(m_activeProfileName, nullptr);
 }
 
 QString DriveBeaconService::profileName() const
 {
-    return m_controller.profileName();
+    return activeController() ? activeController()->profileName() : m_activeProfileName;
 }
 
 QString DriveBeaconService::backendName() const
 {
-    return m_controller.backendName();
+    return activeController() ? activeController()->backendName() : QString();
 }
 
 QString DriveBeaconService::syncStatus() const
 {
-    return m_controller.graphSyncStatus();
+    return activeController() ? activeController()->graphSyncStatus() : QStringLiteral("Idle");
 }
 
 int DriveBeaconService::syncProgress() const
 {
-    return m_controller.graphSyncProgress();
+    return activeController() ? activeController()->graphSyncProgress() : 0;
 }
 
 bool DriveBeaconService::graphAuthenticated() const
 {
-    return m_controller.graphAuthenticated();
+    return activeController() && activeController()->graphAuthenticated();
 }
 
 QString DriveBeaconService::errorMessage() const
 {
-    return m_controller.errorMessage();
+    return activeController() ? activeController()->errorMessage() : QString();
+}
+
+bool DriveBeaconService::graphSyncEnabled() const
+{
+    return activeController() && activeController()->graphSyncEnabled();
+}
+
+bool DriveBeaconService::globalSyncEnabled() const
+{
+    return m_profileStore.globalSyncEnabled();
 }
 
 void DriveBeaconService::synchronizeGraph()
 {
-    m_controller.synchronizeGraph();
+    if (auto *controller = activeController()) {
+        controller->synchronizeGraph();
+    }
 }
 
 void DriveBeaconService::refreshGraphFolders()
 {
-    m_controller.refreshGraphFolders();
+    if (auto *controller = activeController()) {
+        controller->refreshGraphFolders();
+    }
+}
+
+void DriveBeaconService::setProfileSyncEnabled(const QString &profileName, bool enabled)
+{
+    if (auto *controller = m_controllers.value(profileName.trimmed(), nullptr)) {
+        controller->setGraphSyncEnabled(enabled);
+        publishStatus();
+    }
+}
+
+void DriveBeaconService::setGlobalSyncEnabled(bool enabled)
+{
+    m_profileStore.setGlobalSyncEnabled(enabled);
+    for (auto *controller : m_controllers) {
+        controller->setGlobalGraphSyncEnabled(enabled);
+    }
+    publishStatus();
 }
 
 void DriveBeaconService::startLegacyService()
 {
-    m_controller.startService();
+    if (auto *controller = activeController()) {
+        controller->startService();
+    }
 }
 
 void DriveBeaconService::stopLegacyService()
 {
-    m_controller.stopService();
+    if (auto *controller = activeController()) {
+        controller->stopService();
+    }
 }
 
 void DriveBeaconService::restartLegacyService()
 {
-    m_controller.restartService();
+    if (auto *controller = activeController()) {
+        controller->restartService();
+    }
 }
 
 void DriveBeaconService::publishStatus()

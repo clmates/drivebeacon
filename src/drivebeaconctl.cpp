@@ -58,7 +58,13 @@ int printStatus()
            << (values.value(QStringLiteral("graphAuthenticated")).toBool() ? "yes" : "no")
            << "\n"
            << "Sync status: " << values.value(QStringLiteral("syncStatus")).toString() << "\n"
-           << "Sync progress: " << values.value(QStringLiteral("syncProgress")).toInt() << "%\n";
+           << "Sync progress: " << values.value(QStringLiteral("syncProgress")).toInt() << "%\n"
+           << "Profile sync: "
+           << (values.value(QStringLiteral("graphSyncEnabled")).toBool() ? "enabled" : "paused")
+           << "\n"
+           << "Global sync: "
+           << (values.value(QStringLiteral("globalSyncEnabled")).toBool() ? "enabled" : "paused")
+           << "\n";
     const QString error = values.value(QStringLiteral("errorMessage")).toString();
     if (!error.isEmpty()) {
         output << "Error: " << error << "\n";
@@ -66,14 +72,15 @@ int printStatus()
     return 0;
 }
 
-/** Sends one no-argument synchronization operation through D-Bus. */
-int callServiceMethod(const QString &method)
+/** Sends a synchronization or pause operation with optional D-Bus arguments. */
+int callServiceMethod(const QString &method, const QVariantList &arguments = {})
 {
     QDBusInterface service = serviceInterface();
     if (!service.isValid()) {
         return printError(service.lastError().message());
     }
-    const QDBusMessage reply = service.call(method);
+    const QDBusMessage reply = service.callWithArgumentList(QDBus::AutoDetect,
+                                                            method, arguments);
     if (reply.type() == QDBusMessage::ErrorMessage) {
         return printError(reply.errorMessage());
     }
@@ -123,7 +130,8 @@ int main(int argc, char *argv[])
     parser.addVersionOption();
     parser.addPositionalArgument(
         QStringLiteral("command"),
-        QStringLiteral("status, sync, refresh-folders, or service <start|stop|restart>"));
+        QStringLiteral("status, sync, refresh-folders, pause, resume, pause-profile <name>, "
+                       "resume-profile <name>, or service <start|stop|restart>"));
     parser.process(application);
 
     const QStringList arguments = parser.positionalArguments();
@@ -139,6 +147,18 @@ int main(int argc, char *argv[])
     }
     if (command == QStringLiteral("refresh-folders") && arguments.size() == 1) {
         return callServiceMethod(QStringLiteral("refreshGraphFolders"));
+    }
+    if (command == QStringLiteral("pause") && arguments.size() == 1) {
+        return callServiceMethod(QStringLiteral("setGlobalSyncEnabled"), {false});
+    }
+    if (command == QStringLiteral("resume") && arguments.size() == 1) {
+        return callServiceMethod(QStringLiteral("setGlobalSyncEnabled"), {true});
+    }
+    if ((command == QStringLiteral("pause-profile")
+         || command == QStringLiteral("resume-profile"))
+        && arguments.size() == 2) {
+        return callServiceMethod(QStringLiteral("setProfileSyncEnabled"),
+                                 {arguments.at(1), command == QStringLiteral("resume-profile")});
     }
     if (command == QStringLiteral("service") && arguments.size() == 2) {
         const QString action = arguments.at(1);

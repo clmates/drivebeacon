@@ -34,6 +34,7 @@ OneDriveController::OneDriveController(const QString &profileName,
                                        const QString &backendOverride,
                                        const QString &directoryOverride,
                                        bool autoStartGraphSync,
+                                       bool setActiveProfile,
                                        QObject *parent)
     : QObject(parent)
     , m_profileStore(this)
@@ -43,6 +44,9 @@ OneDriveController::OneDriveController(const QString &profileName,
     , m_syncDirectory(m_profile.localDirectory)
     , m_autoStartGraphSync(autoStartGraphSync)
 {
+    m_globalGraphSyncEnabled = m_profileStore.globalSyncEnabled();
+    m_graphSyncEnabled = m_autoStartGraphSync && m_profile.syncEnabled
+        && m_globalGraphSyncEnabled;
     if (!backendOverride.isEmpty()) {
         m_profile.backend = syncBackendFromName(backendOverride);
     }
@@ -50,7 +54,8 @@ OneDriveController::OneDriveController(const QString &profileName,
         m_profile.localDirectory = QDir::cleanPath(QFileInfo(directoryOverride).absoluteFilePath());
         m_syncDirectory = m_profile.localDirectory;
     }
-    if (!profileName.isEmpty() || !backendOverride.isEmpty() || !directoryOverride.isEmpty()) {
+    if ((!profileName.isEmpty() || !backendOverride.isEmpty() || !directoryOverride.isEmpty())
+        && setActiveProfile) {
         m_profileStore.save(m_profile);
         m_profileStore.setActiveProfileName(m_profile.name);
     }
@@ -131,6 +136,12 @@ OneDriveController::OneDriveController(const QString &profileName,
                     m_graphRemoteFolders.append(folder.name);
                 }
                 Q_EMIT graphRemoteFoldersChanged();
+                // Tray clients may inspect authentication and folders while
+                // the headless service owns all Graph synchronization. They
+                // must not start a second monitor for the same profile.
+                if (!m_graphSyncEnabled) {
+                    return;
+                }
                 if (m_autoStartGraphSync && (m_profile.graphDeltaLink.isEmpty()
                     || m_profile.graphLocalSignatures.isEmpty()
                     || m_profile.graphRemotePaths.isEmpty())) {
@@ -207,9 +218,12 @@ OneDriveController::OneDriveController(const QString &profileName,
         m_graphSyncProgress = 100;
         m_graphSyncStatus = QStringLiteral("Completed");
         Q_EMIT graphSyncChanged();
-        m_graphClient.startRemoteMonitoring(m_profile.remoteDriveId, m_graphTokens.accessToken,
-                                            m_profile.remoteCheckIntervalSeconds,
-                                            m_profile.graphDeltaLink);
+        if (m_graphSyncEnabled) {
+            m_graphClient.startRemoteMonitoring(m_profile.remoteDriveId,
+                                                m_graphTokens.accessToken,
+                                                m_profile.remoteCheckIntervalSeconds,
+                                                m_profile.graphDeltaLink);
+        }
     });
     connect(&m_graphClient, &GraphClient::deltaLinkChanged, this,
             [this](const QString &deltaLink) {
@@ -437,6 +451,11 @@ int OneDriveController::graphSyncProgress() const
     return m_graphSyncProgress;
 }
 
+bool OneDriveController::graphSyncEnabled() const
+{
+    return m_graphSyncEnabled;
+}
+
 QStringList OneDriveController::graphRemoteFolders() const
 {
     return m_graphRemoteFolders;
@@ -516,7 +535,7 @@ void OneDriveController::completeGraphLogin(const QString &responseUrl)
 void OneDriveController::synchronizeGraph()
 {
     if (m_profile.backend != SyncBackend::MicrosoftGraph || !graphAuthenticated()
-        || m_profile.remoteDriveId.isEmpty()) {
+        || m_profile.remoteDriveId.isEmpty() || !m_graphSyncEnabled) {
         return;
     }
     if (m_profile.availability != LocalAvailability::KeepLocal) {
@@ -538,6 +557,60 @@ void OneDriveController::synchronizeGraph()
     m_graphClient.synchronize(m_profile.remoteDriveId, m_graphTokens.accessToken,
                               m_profile.localDirectory, m_profile.includedFolders,
                               m_profile.excludedFolders);
+}
+
+void OneDriveController::setGraphSyncEnabled(bool enabled)
+{
+    m_profile.syncEnabled = enabled;
+    m_profileStore.save(m_profile);
+    m_graphSyncEnabled = enabled && m_autoStartGraphSync && m_globalGraphSyncEnabled;
+    if (!m_graphSyncEnabled) {
+        m_graphClient.stopMonitoring();
+        m_graphSyncStatus = QStringLiteral("Paused");
+        m_graphSyncProgress = 0;
+        Q_EMIT graphSyncChanged();
+        return;
+    }
+    if (!graphAuthenticated() || m_profile.remoteDriveId.isEmpty()) {
+        m_graphSyncStatus = QStringLiteral("Ready");
+        Q_EMIT graphSyncChanged();
+        return;
+    }
+    m_graphClient.initializeLocalMonitoring(m_profile.graphLocalSignatures,
+                                            m_profile.graphRemotePaths,
+                                            m_profile.localDirectory);
+    m_graphClient.configureTransferConcurrency(
+        m_profile.concurrentDownloads, m_profile.concurrentUploads,
+        m_profile.concurrentLargeTransfers);
+    if (m_profile.graphDeltaLink.isEmpty() || m_profile.graphLocalSignatures.isEmpty()
+        || m_profile.graphRemotePaths.isEmpty()) {
+        synchronizeGraph();
+        return;
+    }
+    m_graphClient.startRemoteMonitoring(
+        m_profile.remoteDriveId, m_graphTokens.accessToken,
+        m_profile.remoteCheckIntervalSeconds, m_profile.graphDeltaLink);
+    m_graphSyncStatus = QStringLiteral("Completed");
+    m_graphSyncProgress = 100;
+    Q_EMIT graphSyncChanged();
+}
+
+void OneDriveController::setGlobalGraphSyncEnabled(bool enabled)
+{
+    m_globalGraphSyncEnabled = enabled;
+    const bool shouldRun = m_profile.syncEnabled && enabled && m_autoStartGraphSync;
+    if (shouldRun == m_graphSyncEnabled) {
+        return;
+    }
+    if (!shouldRun) {
+        m_graphSyncEnabled = false;
+        m_graphClient.stopMonitoring();
+        m_graphSyncStatus = QStringLiteral("Paused");
+        m_graphSyncProgress = 0;
+        Q_EMIT graphSyncChanged();
+        return;
+    }
+    setGraphSyncEnabled(true);
 }
 
 void OneDriveController::refreshGraphFolders()

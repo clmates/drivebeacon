@@ -34,6 +34,8 @@ struct SyncProfile {
     QString localDirectory;
     /** Whether Graph content is materialized locally. */
     LocalAvailability availability = LocalAvailability::KeepLocal;
+    /** Whether this profile is allowed to perform Graph synchronization work. */
+    bool syncEnabled = true;
     /** Polling period for Graph delta requests, clamped to 10..3600 seconds. */
     int remoteCheckIntervalSeconds = 30;
     /** Maximum simultaneous remote downloads for this profile. */

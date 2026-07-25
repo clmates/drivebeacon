@@ -8,6 +8,7 @@
 #include <KLocalizedString>
 
 #include <QComboBox>
+#include <QCheckBox>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileDialog>
@@ -36,6 +37,8 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     , m_backendCombo(new QComboBox(this))
     , m_directoryEdit(new QLineEdit(this))
     , m_availabilityCombo(new QComboBox(this))
+    , m_syncEnabledCheck(new QCheckBox(i18n("Synchronize this account"), this))
+    , m_globalSyncEnabledCheck(new QCheckBox(i18n("Synchronize all accounts"), this))
     , m_folderTree(new QTreeWidget(this))
     , m_refreshFoldersButton(new QPushButton(i18n("Refresh folders"), this))
     , m_remoteIntervalSpin(new QSpinBox(this))
@@ -43,6 +46,7 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     , m_concurrentUploadsSpin(new QSpinBox(this))
     , m_concurrentLargeTransfersSpin(new QSpinBox(this))
     , m_clientIdEdit(new QLineEdit(this))
+    , m_clientIdHelpButton(new QPushButton(i18n("How to create one…"), this))
     , m_driveIdEdit(new QLineEdit(this))
     , m_graphStatusLabel(new QLabel(this))
     , m_verificationLabel(new QLabel(this))
@@ -68,6 +72,17 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     m_concurrentDownloadsSpin->setRange(1, 8);
     m_concurrentUploadsSpin->setRange(1, 8);
     m_concurrentLargeTransfersSpin->setRange(1, 4);
+    m_clientIdEdit->setToolTip(i18n(
+        "A public Microsoft application client ID identifies DriveBeacon to Microsoft. "
+        "It is not a password. Leave the packaged default unchanged unless you want to "
+        "use your own Microsoft Entra application registration."));
+    m_clientIdHelpButton->setToolTip(i18n(
+        "Learn which Microsoft Entra account types, permissions, and redirect settings "
+        "are required for a personal or multi-tenant application."));
+    m_syncEnabledCheck->setToolTip(i18n(
+        "Pause this account without deleting its local files, tokens, deltas, or baselines."));
+    m_globalSyncEnabledCheck->setToolTip(i18n(
+        "Pause or resume every configured account without changing each account's own setting."));
 
     auto *profileButtons = new QHBoxLayout;
     auto *newButton = new QPushButton(i18n("New"), this);
@@ -91,7 +106,10 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
 
     auto *graphBox = new QGroupBox(i18n("Microsoft Graph"), this);
     auto *graphForm = new QFormLayout(graphBox);
-    graphForm->addRow(i18n("Application client ID:"), m_clientIdEdit);
+    auto *clientIdRow = new QHBoxLayout;
+    clientIdRow->addWidget(m_clientIdEdit, 1);
+    clientIdRow->addWidget(m_clientIdHelpButton);
+    graphForm->addRow(i18n("Application client ID:"), clientIdRow);
     graphForm->addRow(i18n("Remote drive ID (optional):"), m_driveIdEdit);
     auto *graphActions = new QHBoxLayout;
     graphActions->addWidget(m_connectButton);
@@ -107,6 +125,8 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     form->addRow(i18n("Backend:"), m_backendCombo);
     form->addRow(i18n("Local directory:"), directoryRow);
     form->addRow(i18n("Availability:"), m_availabilityCombo);
+    form->addRow(i18n("Account state:"), m_syncEnabledCheck);
+    form->addRow(i18n("Global state:"), m_globalSyncEnabledCheck);
     form->addRow(i18n("Remote check interval:"), m_remoteIntervalSpin);
     form->addRow(i18n("Simultaneous downloads:"), m_concurrentDownloadsSpin);
     form->addRow(i18n("Simultaneous uploads:"), m_concurrentUploadsSpin);
@@ -138,6 +158,31 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     connect(m_backendCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this] { updateGraphStatus(); });
     connect(m_connectButton, &QPushButton::clicked, this, &ProfileDialog::connectGraph);
+    connect(m_clientIdHelpButton, &QPushButton::clicked, this, [this] {
+        // Keep registration guidance next to the setting so users can choose
+        // between the packaged public client and their own application.
+        QMessageBox help(this);
+        help.setWindowTitle(i18n("Microsoft Graph application client ID"));
+        help.setText(i18n(
+            "DriveBeacon uses a public application client ID to start Microsoft's OAuth "
+            "sign-in flow. The ID does not contain account credentials and can be shared "
+            "with the application. Access is granted separately by each Microsoft user."));
+        help.setInformativeText(i18n(
+            "The packaged value is suitable for normal use. You may replace it with your "
+            "own Microsoft Entra app registration if you need to control its branding, "
+            "supported account types, permissions, or consent policy. Configure the app "
+            "as a public desktop client and allow personal Microsoft accounts and/or "
+            "accounts from any organizational directory as appropriate. The redirect URI "
+            "must match the one configured for the app."));
+        auto *docsButton = help.addButton(i18n("Open Microsoft instructions"),
+                                          QMessageBox::AcceptRole);
+        help.addButton(QMessageBox::Close);
+        help.exec();
+        if (help.clickedButton() == docsButton) {
+            QDesktopServices::openUrl(QUrl(
+                QStringLiteral("https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app")));
+        }
+    });
     connect(m_openVerificationButton, &QPushButton::clicked,
             this, &ProfileDialog::openVerificationPage);
     connect(m_completeButton, &QPushButton::clicked, this, [this] {
@@ -208,6 +253,8 @@ void ProfileDialog::loadProfile(const QString &name)
     m_directoryEdit->setText(profile.localDirectory);
     m_availabilityCombo->setCurrentIndex(
         m_availabilityCombo->findData(localAvailabilityName(profile.availability)));
+    m_syncEnabledCheck->setChecked(profile.syncEnabled);
+    m_globalSyncEnabledCheck->setChecked(m_store->globalSyncEnabled());
     m_remoteIntervalSpin->setValue(profile.remoteCheckIntervalSeconds);
     m_concurrentDownloadsSpin->setValue(profile.concurrentDownloads);
     m_concurrentUploadsSpin->setValue(profile.concurrentUploads);
@@ -225,6 +272,8 @@ void ProfileDialog::createProfile()
     m_directoryEdit->setText(QDir::home().filePath(QStringLiteral("OneDrive-Graph-Test")));
     m_availabilityCombo->setCurrentIndex(
         m_availabilityCombo->findData(QStringLiteral("keep-local")));
+    m_syncEnabledCheck->setChecked(true);
+    m_globalSyncEnabledCheck->setChecked(m_store->globalSyncEnabled());
     m_concurrentDownloadsSpin->setValue(2);
     m_concurrentUploadsSpin->setValue(2);
     m_concurrentLargeTransfersSpin->setValue(1);
@@ -254,6 +303,7 @@ void ProfileDialog::saveProfile()
         QFileInfo(m_directoryEdit->text().trimmed()).absoluteFilePath());
     profile.availability = localAvailabilityFromName(
         m_availabilityCombo->currentData().toString());
+    profile.syncEnabled = m_syncEnabledCheck->isChecked();
     profile.remoteCheckIntervalSeconds = m_remoteIntervalSpin->value();
     profile.concurrentDownloads = m_concurrentDownloadsSpin->value();
     profile.concurrentUploads = m_concurrentUploadsSpin->value();
@@ -270,6 +320,7 @@ void ProfileDialog::saveProfile()
     profile.graphClientId = m_clientIdEdit->text().trimmed();
     profile.remoteDriveId = m_driveIdEdit->text().trimmed();
     m_store->save(profile);
+    m_store->setGlobalSyncEnabled(m_globalSyncEnabledCheck->isChecked());
     refreshProfileList(name);
 }
 

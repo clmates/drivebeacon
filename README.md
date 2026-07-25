@@ -40,6 +40,11 @@ and allows the dialog to be shown again on a later run.
 Use **Configure profiles…** from the tray menu to create or edit profiles. For
 a Graph profile, enter the public application client ID, save it, select **Use
 profile**, and reopen the configuration dialog after the restart. The
+dialog includes a tooltip and a help button explaining that this ID is public,
+how it differs from account credentials, and when a user may provide their own
+Microsoft Entra app registration. The release build will provide a default
+client ID; users who replace it must configure a public desktop application
+with the required account types, permissions, and redirect URI. The
 **Connect** button starts Microsoft's interactive browser OAuth flow. After
 authorization, DriveBeacon captures the localhost redirect automatically when
 the application registration includes the callback. The manual response URL
@@ -94,8 +99,17 @@ tray. It uses the active profile from the shared DriveBeacon configuration:
 drivebeaconctl status
 drivebeaconctl sync
 drivebeaconctl refresh-folders
+drivebeaconctl pause                 # pause all Graph accounts
+drivebeaconctl resume                # resume all Graph accounts
+drivebeaconctl pause-profile NAME    # pause one account
+drivebeaconctl resume-profile NAME   # resume one account
 drivebeaconctl service start|stop|restart
 ```
+
+Pausing is non-destructive: DriveBeacon keeps the account's local files,
+tokens, delta cursor, and synchronization baselines. Resuming continues from
+that persisted state. The profile dialog and tray expose the same per-account
+and global controls.
 
 Closing the window leaves the tray application running. Use **Quit** in its tray
 menu to exit completely. The `run` target exposes the build-tree desktop metadata

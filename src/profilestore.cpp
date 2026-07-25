@@ -54,6 +54,9 @@ SyncProfile ProfileStore::load(const QString &requestedName) const
     profile.availability = localAvailabilityFromName(
         settings.value(QStringLiteral("availability"), localAvailabilityName(profile.availability))
             .toString());
+    // Missing values remain enabled for backward compatibility with existing
+    // profiles created before per-account pause state was introduced.
+    profile.syncEnabled = settings.value(QStringLiteral("syncEnabled"), true).toBool();
     profile.remoteCheckIntervalSeconds = qBound(10, settings.value(
         QStringLiteral("remoteCheckIntervalSeconds"), profile.remoteCheckIntervalSeconds).toInt(), 3600);
     profile.concurrentDownloads = qBound(1, settings.value(
@@ -90,6 +93,7 @@ void ProfileStore::save(const SyncProfile &profile)
     settings.setValue(QStringLiteral("remoteDriveId"), profile.remoteDriveId);
     settings.setValue(QStringLiteral("localDirectory"), profile.localDirectory);
     settings.setValue(QStringLiteral("availability"), localAvailabilityName(profile.availability));
+    settings.setValue(QStringLiteral("syncEnabled"), profile.syncEnabled);
     settings.setValue(QStringLiteral("remoteCheckIntervalSeconds"),
                       qBound(10, profile.remoteCheckIntervalSeconds, 3600));
     settings.setValue(QStringLiteral("concurrentDownloads"), qBound(1, profile.concurrentDownloads, 8));
@@ -106,6 +110,19 @@ void ProfileStore::save(const SyncProfile &profile)
     settings.setValue(QStringLiteral("graphSyncedExcludedFolders"),
                       profile.graphSyncedExcludedFolders);
     settings.endGroup();
+    settings.sync();
+}
+
+bool ProfileStore::globalSyncEnabled() const
+{
+    QSettings settings;
+    return settings.value(QStringLiteral("profiles/globalSyncEnabled"), true).toBool();
+}
+
+void ProfileStore::setGlobalSyncEnabled(bool enabled)
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("profiles/globalSyncEnabled"), enabled);
     settings.sync();
 }
 

@@ -61,6 +61,16 @@ QString DriveBeaconServiceClient::errorMessage() const
     return m_errorMessage;
 }
 
+bool DriveBeaconServiceClient::graphSyncEnabled() const
+{
+    return m_graphSyncEnabled;
+}
+
+bool DriveBeaconServiceClient::globalSyncEnabled() const
+{
+    return m_globalSyncEnabled;
+}
+
 void DriveBeaconServiceClient::refresh()
 {
     const auto connection = QDBusConnection::sessionBus();
@@ -74,6 +84,8 @@ void DriveBeaconServiceClient::refresh()
         m_syncProgress = 0;
         m_graphAuthenticated = false;
         m_errorMessage.clear();
+        m_graphSyncEnabled = false;
+        m_globalSyncEnabled = true;
         Q_EMIT statusChanged();
         return;
     }
@@ -103,12 +115,22 @@ void DriveBeaconServiceClient::refreshGraphFolders()
     call(QStringLiteral("refreshGraphFolders"));
 }
 
+void DriveBeaconServiceClient::setProfileSyncEnabled(const QString &profileName, bool enabled)
+{
+    call(QStringLiteral("setProfileSyncEnabled"), {profileName, enabled});
+}
+
+void DriveBeaconServiceClient::setGlobalSyncEnabled(bool enabled)
+{
+    call(QStringLiteral("setGlobalSyncEnabled"), {enabled});
+}
+
 void DriveBeaconServiceClient::onRemoteStatusChanged()
 {
     refresh();
 }
 
-void DriveBeaconServiceClient::call(const QString &method)
+void DriveBeaconServiceClient::call(const QString &method, const QVariantList &arguments)
 {
     if (!m_available) {
         Q_EMIT errorOccurred(QStringLiteral("DriveBeacon service is unavailable."));
@@ -116,7 +138,8 @@ void DriveBeaconServiceClient::call(const QString &method)
     }
     QDBusInterface service(serviceName, objectPath, interfaceName,
                            QDBusConnection::sessionBus());
-    auto *watcher = new QDBusPendingCallWatcher(service.asyncCall(method), this);
+    auto *watcher = new QDBusPendingCallWatcher(
+        service.asyncCallWithArgumentList(method, arguments), this);
     connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, watcher] {
         const QDBusPendingReply<> reply = *watcher;
         if (reply.isError()) {
@@ -132,13 +155,19 @@ void DriveBeaconServiceClient::applyProperties(const QVariantMap &properties)
     const int progress = properties.value(QStringLiteral("syncProgress")).toInt();
     const bool authenticated = properties.value(QStringLiteral("graphAuthenticated")).toBool();
     const QString error = properties.value(QStringLiteral("errorMessage")).toString();
+    const bool syncEnabled = properties.value(QStringLiteral("graphSyncEnabled")).toBool();
+    const bool globalSyncEnabled = properties.value(QStringLiteral("globalSyncEnabled")).toBool();
     if (status == m_syncStatus && progress == m_syncProgress
-        && authenticated == m_graphAuthenticated && error == m_errorMessage) {
+        && authenticated == m_graphAuthenticated && error == m_errorMessage
+        && syncEnabled == m_graphSyncEnabled
+        && globalSyncEnabled == m_globalSyncEnabled) {
         return;
     }
     m_syncStatus = status;
     m_syncProgress = progress;
     m_graphAuthenticated = authenticated;
     m_errorMessage = error;
+    m_graphSyncEnabled = syncEnabled;
+    m_globalSyncEnabled = globalSyncEnabled;
     Q_EMIT statusChanged();
 }

@@ -24,6 +24,10 @@ public:
     [[nodiscard]] SyncProfile load(const QString &name = {}) const;
     /** Persists the active profile for the next application start. */
     void save(const SyncProfile &profile);
+    /** Returns whether synchronization is globally enabled for all profiles. */
+    [[nodiscard]] bool globalSyncEnabled() const;
+    /** Persists the global pause state without changing individual profiles. */
+    void setGlobalSyncEnabled(bool enabled);
     /** Marks a profile as the default when no command-line override is supplied. */
     void setActiveProfileName(const QString &name);
 

@@ -21,6 +21,7 @@ private Q_SLOTS:
     void parsesGraphQuota();
     void marksMissingQuotaValuesUnknown();
     void storesProfilesIndependently();
+    void storesIndividualAndGlobalSyncState();
 
 private:
     QTemporaryDir m_configDirectory;
@@ -116,6 +117,24 @@ void SyncProfileTest::storesProfilesIndependently()
              QStringList({QStringLiteral("id\tDocumentos/a.txt\te")}));
     QCOMPARE(store.load().graphSyncedIncludedFolders,
              QStringList({QStringLiteral("Documentos")}));
+}
+
+void SyncProfileTest::storesIndividualAndGlobalSyncState()
+{
+    ProfileStore store;
+    SyncProfile profile;
+    profile.name = QStringLiteral("paused-account");
+    profile.syncEnabled = false;
+    store.save(profile);
+
+    QCOMPARE(store.load(profile.name).syncEnabled, false);
+    QCOMPARE(store.globalSyncEnabled(), true);
+    store.setGlobalSyncEnabled(false);
+    QCOMPARE(store.globalSyncEnabled(), false);
+
+    // Global pause is independent from the per-profile switch and must not
+    // rewrite the profile's own state or its persisted synchronization data.
+    QCOMPARE(store.load(profile.name).syncEnabled, false);
 }
 
 QTEST_MAIN(SyncProfileTest)

@@ -104,6 +104,8 @@ public:
     /** Starts delta-based remote change checks using the configured interval. */
     void startRemoteMonitoring(const QString &driveId, const QString &accessToken,
                                int intervalSeconds, const QString &deltaLink = {});
+    /** Stops polling without discarding queues, cursors, or local baselines. */
+    void stopMonitoring();
     /** Applies per-profile transfer limits before synchronization starts. */
     void configureTransferConcurrency(int downloads, int uploads, int largeTransfers);
     /** Restores local signatures and starts local change monitoring without a full scan. */
@@ -222,6 +224,8 @@ private:
     /** Local polling and remote delta polling timers. */
     QTimer m_uploadTimer;
     QTimer m_remoteTimer;
+    /** False while a profile is paused; persisted state remains untouched. */
+    bool m_monitoringEnabled = true;
     /** Opaque Graph delta cursor and credentials for subsequent polling. */
     QString m_deltaDriveId;
     QString m_deltaToken;

@@ -39,14 +39,21 @@ class OneDriveController final : public QObject
     Q_PROPERTY(QString graphAuthorizationUrl READ graphAuthorizationUrl NOTIFY graphAuthChanged)
     Q_PROPERTY(QString graphSyncStatus READ graphSyncStatus NOTIFY graphSyncChanged)
     Q_PROPERTY(int graphSyncProgress READ graphSyncProgress NOTIFY graphSyncChanged)
+    Q_PROPERTY(bool graphSyncEnabled READ graphSyncEnabled NOTIFY graphSyncChanged)
     Q_PROPERTY(QStringList graphRemoteFolders READ graphRemoteFolders NOTIFY graphRemoteFoldersChanged)
 
 public:
-    /** Creates the backend objects, loads configuration, and starts journal monitoring. */
+    /**
+     * Creates the backend objects and loads one profile.
+     * @param autoStartGraphSync allows this instance to own Graph polling.
+     * @param setActiveProfile makes an explicit profile the user-facing active profile;
+     *                         service-owned secondary controllers leave it unchanged.
+     */
     explicit OneDriveController(const QString &profileName = {},
                                 const QString &backendOverride = {},
                                 const QString &directoryOverride = {},
                                 bool autoStartGraphSync = true,
+                                bool setActiveProfile = true,
                                 QObject *parent = nullptr);
 
     /** Returns the model containing recent OneDrive activity. */
@@ -97,6 +104,8 @@ public:
     [[nodiscard]] QString graphSyncStatus() const;
     /** Returns the current remote-to-local synchronization percentage. */
     [[nodiscard]] int graphSyncProgress() const;
+    /** Returns whether this profile is currently allowed to synchronize. */
+    [[nodiscard]] bool graphSyncEnabled() const;
     /** Returns the first-level folders discovered in the signed-in drive. */
     [[nodiscard]] QStringList graphRemoteFolders() const;
 
@@ -120,6 +129,10 @@ public:
     Q_INVOKABLE void synchronizeGraph();
     /** Refreshes the first-level remote folder list for profile configuration. */
     Q_INVOKABLE void refreshGraphFolders();
+    /** Enables or pauses this profile while retaining all synchronization state. */
+    Q_INVOKABLE void setGraphSyncEnabled(bool enabled);
+    /** Applies the global pause without changing this profile's own setting. */
+    void setGlobalGraphSyncEnabled(bool enabled);
     /** Confirms migration of the discovered abraunegg configuration. */
     Q_INVOKABLE void confirmLegacyMigration(const QString &profileName);
     /** Leaves the discovered legacy configuration untouched and continues. */
@@ -178,4 +191,8 @@ private:
     bool m_legacyMigrationPending = false;
     /** Tray clients keep this false while the headless service owns Graph sync. */
     bool m_autoStartGraphSync = true;
+    /** Global pause state kept separate from the profile's persisted switch. */
+    bool m_globalGraphSyncEnabled = true;
+    /** Effective runtime state after combining both pause switches and ownership. */
+    bool m_graphSyncEnabled = true;
 };
