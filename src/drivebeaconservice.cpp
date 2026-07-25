@@ -24,8 +24,12 @@ DriveBeaconService::DriveBeaconService(const QString &profileName, QObject *pare
                 this, &DriveBeaconService::publishStatus);
         connect(controller, &OneDriveController::graphAuthChanged,
                 this, &DriveBeaconService::publishStatus);
-        connect(controller, &OneDriveController::logMessage,
-                this, &DriveBeaconService::activityMessage);
+        connect(controller, &OneDriveController::logMessage, this,
+                [this, name](const QString &message) {
+                    // Include the account key so the shared tray history can
+                    // distinguish identical paths handled by different users.
+                    Q_EMIT activityMessage(QStringLiteral("[%1] %2").arg(name, message));
+                });
         connect(controller, &OneDriveController::errorMessageChanged,
                 this, &DriveBeaconService::publishStatus);
     }

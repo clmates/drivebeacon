@@ -18,6 +18,7 @@
 #include <QMenu>
 #include <QInputDialog>
 #include <QProcess>
+#include <QRegularExpression>
 
 namespace {
 /** Formats byte counts for the tray without exposing provider-specific units. */
@@ -319,6 +320,39 @@ int main(int argc, char *argv[])
                      &application, updateTray);
     QObject::connect(&controller, &OneDriveController::graphSyncChanged,
                      &application, updateTray);
+    QObject::connect(&serviceClient, &DriveBeaconServiceClient::activityMessage,
+                     &application, [&controller](const QString &message) {
+                         // The headless service owns Graph's activity model;
+                         // mirror its messages into the tray process so the
+                         // visible history remains useful after decoupling.
+                         static const QRegularExpression progressExpression(
+                             QStringLiteral("^\\[[^]]+\\] Graph sync: "
+                                            "(?:downloading|uploading) (.+) \\((\\d+)%"));
+                         static const QRegularExpression queuedExpression(
+                             QStringLiteral("^\\[[^]]+\\] Graph sync: "
+                                            "(?:downloading|uploading) (.+) \\((\\d+)/(\\d+)\\)$"));
+                         static const QRegularExpression completedExpression(
+                             QStringLiteral("^\\[[^]]+\\] Graph sync: "
+                                            "(?:downloaded|uploaded) (.+?)(?: \\(100%.*\\))?$"));
+                         const auto progressMatch = progressExpression.match(message);
+                         const auto queuedMatch = queuedExpression.match(message);
+                         const auto completedMatch = completedExpression.match(message);
+                         if (progressMatch.hasMatch()) {
+                             controller.activities()->updateGraphProgress(
+                                 progressMatch.captured(1), message,
+                                 progressMatch.captured(2).toInt() >= 100);
+                         } else if (queuedMatch.hasMatch()) {
+                             controller.activities()->updateGraphProgress(
+                                 queuedMatch.captured(1), message, false);
+                         } else if (completedMatch.hasMatch()) {
+                             controller.activities()->updateGraphProgress(
+                                 completedMatch.captured(1), message, true);
+                         } else {
+                             controller.activities()->prepend(
+                                 {QDateTime::currentDateTimeUtc(), QStringLiteral("graph-log"),
+                                  {}, {}, message, true});
+                         }
+                     });
     QObject::connect(&serviceClient, &DriveBeaconServiceClient::availabilityChanged,
                      &application, updateTray);
     QObject::connect(&serviceClient, &DriveBeaconServiceClient::statusChanged,

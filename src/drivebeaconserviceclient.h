@@ -55,10 +55,14 @@ Q_SIGNALS:
     void statusChanged();
     /** Emitted when an action cannot be sent to the service. */
     void errorOccurred(const QString &message);
+    /** Emitted for synchronization log messages forwarded by the service. */
+    void activityMessage(const QString &message);
 
 private Q_SLOTS:
     /** Re-reads properties after the service emits its status signal. */
     void onRemoteStatusChanged();
+    /** Receives one activity signal from the service's D-Bus interface. */
+    void onRemoteActivityMessage(const QString &message);
 
 private:
     /** Calls a service method and reports D-Bus errors to the tray. */

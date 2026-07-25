@@ -24,6 +24,9 @@ DriveBeaconServiceClient::DriveBeaconServiceClient(QObject *parent)
     auto connection = QDBusConnection::sessionBus();
     connection.connect(serviceName, objectPath, interfaceName, QStringLiteral("statusChanged"),
                        this, SLOT(onRemoteStatusChanged()));
+    connection.connect(serviceName, objectPath, interfaceName,
+                       QStringLiteral("activityMessage"),
+                       this, SLOT(onRemoteActivityMessage(QString)));
     auto *watcher = new QDBusServiceWatcher(
         serviceName, connection,
         QDBusServiceWatcher::WatchForRegistration
@@ -128,6 +131,11 @@ void DriveBeaconServiceClient::setGlobalSyncEnabled(bool enabled)
 void DriveBeaconServiceClient::onRemoteStatusChanged()
 {
     refresh();
+}
+
+void DriveBeaconServiceClient::onRemoteActivityMessage(const QString &message)
+{
+    Q_EMIT activityMessage(message);
 }
 
 void DriveBeaconServiceClient::call(const QString &method, const QVariantList &arguments)

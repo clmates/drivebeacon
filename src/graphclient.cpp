@@ -386,7 +386,10 @@ void GraphClient::logProgress(const QString &message)
 {
     // Transfer progress is represented by one mutable ActivityModel row; it
     // remains fully visible in journald without creating a row per percentage.
+    // Forward it as well so a headless service can reproduce that row in the
+    // tray process after synchronization was decoupled from the UI.
     graphLog(message);
+    Q_EMIT logMessage(message);
 }
 
 void GraphClient::startRemoteMonitoring(const QString &driveId, const QString &accessToken,
