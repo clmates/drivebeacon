@@ -6,6 +6,7 @@
 
 #include <QObject>
 #include <QHash>
+#include <QVariantMap>
 
 /**
  * Headless D-Bus facade for the synchronization controller.
@@ -20,6 +21,8 @@ class DriveBeaconService final : public QObject
     Q_CLASSINFO("D-Bus Interface", "io.github.clmates.DriveBeacon1")
     Q_PROPERTY(QString profileName READ profileName CONSTANT)
     Q_PROPERTY(QString backendName READ backendName CONSTANT)
+    /** Names of all Graph profiles loaded by this service instance. */
+    Q_PROPERTY(QStringList graphProfiles READ graphProfiles NOTIFY statusChanged)
     Q_PROPERTY(QString syncStatus READ syncStatus NOTIFY statusChanged)
     Q_PROPERTY(int syncProgress READ syncProgress NOTIFY statusChanged)
     Q_PROPERTY(bool graphAuthenticated READ graphAuthenticated NOTIFY statusChanged)
@@ -35,6 +38,8 @@ public:
 
     [[nodiscard]] QString profileName() const;
     [[nodiscard]] QString backendName() const;
+    /** Returns the sorted Graph profile names loaded by the service. */
+    [[nodiscard]] QStringList graphProfiles() const;
     [[nodiscard]] QString syncStatus() const;
     [[nodiscard]] int syncProgress() const;
     [[nodiscard]] bool graphAuthenticated() const;
@@ -51,6 +56,8 @@ public Q_SLOTS:
     void setProfileSyncEnabled(const QString &profileName, bool enabled);
     /** Pauses or resumes all Graph profiles while preserving their own flags. */
     void setGlobalSyncEnabled(bool enabled);
+    /** Returns status fields for one loaded profile for CLI and tray clients. */
+    Q_INVOKABLE QVariantMap profileStatus(const QString &profileName) const;
     /** Controls the legacy onedrive.service through the existing manager. */
     void startLegacyService();
     void stopLegacyService();

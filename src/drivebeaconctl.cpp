@@ -52,22 +52,32 @@ int printStatus()
     const QVariantMap values = reply.value();
     QTextStream output(stdout);
     output << "Service: available\n"
-           << "Profile: " << values.value(QStringLiteral("profileName")).toString() << "\n"
-           << "Backend: " << values.value(QStringLiteral("backendName")).toString() << "\n"
-           << "Authenticated: "
-           << (values.value(QStringLiteral("graphAuthenticated")).toBool() ? "yes" : "no")
-           << "\n"
-           << "Sync status: " << values.value(QStringLiteral("syncStatus")).toString() << "\n"
-           << "Sync progress: " << values.value(QStringLiteral("syncProgress")).toInt() << "%\n"
-           << "Profile sync: "
-           << (values.value(QStringLiteral("graphSyncEnabled")).toBool() ? "enabled" : "paused")
-           << "\n"
            << "Global sync: "
            << (values.value(QStringLiteral("globalSyncEnabled")).toBool() ? "enabled" : "paused")
            << "\n";
-    const QString error = values.value(QStringLiteral("errorMessage")).toString();
-    if (!error.isEmpty()) {
-        output << "Error: " << error << "\n";
+    output << "Active profile: " << values.value(QStringLiteral("profileName")).toString()
+           << "\n";
+    const QStringList profiles = values.value(QStringLiteral("graphProfiles")).toStringList();
+    for (const QString &profile : profiles) {
+        const QDBusReply<QVariantMap> profileReply = service.call(
+            QStringLiteral("profileStatus"), profile);
+        if (!profileReply.isValid()) {
+            return printError(profileReply.error().message());
+        }
+        const QVariantMap profileValues = profileReply.value();
+        output << "\nProfile: " << profileValues.value(QStringLiteral("profileName")).toString()
+               << "\n  Backend: " << profileValues.value(QStringLiteral("backendName")).toString()
+               << "\n  Authenticated: "
+               << (profileValues.value(QStringLiteral("authenticated")).toBool() ? "yes" : "no")
+               << "\n  Sync: "
+               << (profileValues.value(QStringLiteral("syncEnabled")).toBool() ? "enabled" : "paused")
+               << "\n  Status: " << profileValues.value(QStringLiteral("syncStatus")).toString()
+               << "\n  Progress: " << profileValues.value(QStringLiteral("syncProgress")).toInt()
+               << "%\n";
+        const QString error = profileValues.value(QStringLiteral("error")).toString();
+        if (!error.isEmpty()) {
+            output << "  Error: " << error << "\n";
+        }
     }
     return 0;
 }

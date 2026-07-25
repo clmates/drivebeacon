@@ -2,6 +2,8 @@
 
 #include "drivebeaconservice.h"
 
+#include <algorithm>
+
 DriveBeaconService::DriveBeaconService(const QString &profileName, QObject *parent)
     : QObject(parent)
     , m_profileStore(this)
@@ -48,6 +50,32 @@ QString DriveBeaconService::profileName() const
 QString DriveBeaconService::backendName() const
 {
     return activeController() ? activeController()->backendName() : QString();
+}
+
+QStringList DriveBeaconService::graphProfiles() const
+{
+    QStringList profiles = m_controllers.keys();
+    std::sort(profiles.begin(), profiles.end());
+    return profiles;
+}
+
+QVariantMap DriveBeaconService::profileStatus(const QString &profileName) const
+{
+    QVariantMap status;
+    const QString name = profileName.trimmed();
+    auto *controller = m_controllers.value(name, nullptr);
+    if (!controller) {
+        status.insert(QStringLiteral("error"), QStringLiteral("Profile is not loaded."));
+        return status;
+    }
+    status.insert(QStringLiteral("profileName"), controller->profileName());
+    status.insert(QStringLiteral("backendName"), controller->backendName());
+    status.insert(QStringLiteral("authenticated"), controller->graphAuthenticated());
+    status.insert(QStringLiteral("syncEnabled"), controller->graphSyncEnabled());
+    status.insert(QStringLiteral("syncStatus"), controller->graphSyncStatus());
+    status.insert(QStringLiteral("syncProgress"), controller->graphSyncProgress());
+    status.insert(QStringLiteral("error"), controller->errorMessage());
+    return status;
 }
 
 QString DriveBeaconService::syncStatus() const

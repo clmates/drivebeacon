@@ -106,6 +106,10 @@ drivebeaconctl resume-profile NAME   # resume one account
 drivebeaconctl service start|stop|restart
 ```
 
+`drivebeaconctl status` reports the active profile and then lists every loaded
+Graph profile with its own authentication, pause state, synchronization status,
+progress, and error message.
+
 Pausing is non-destructive: DriveBeacon keeps the account's local files,
 tokens, delta cursor, and synchronization baselines. Resuming continues from
 that persisted state. The profile dialog and tray expose the same per-account
