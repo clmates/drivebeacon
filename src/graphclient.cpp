@@ -213,11 +213,16 @@ GraphClient::GraphClient(QObject *parent)
                     if (!oldPath.isEmpty() && isIncluded(oldPath)) {
                         log(QStringLiteral("Graph sync: removing remotely deleted %1").arg(oldPath));
                         const QString localPath = safeLocalPath(oldPath);
-                        if (item.contains(QStringLiteral("file")) || !QFileInfo(localPath).isDir()) {
+                        if (m_materializeFiles) {
+                            if (item.contains(QStringLiteral("file")) || !QFileInfo(localPath).isDir()) {
+                                QFile::remove(localPath);
+                            } else {
+                                QDir().rmdir(localPath);
+                            }
+                        } else if (m_placeholderPaths.contains(oldPath)) {
                             QFile::remove(localPath);
-                        } else {
-                            QDir().rmdir(localPath);
                         }
+                        m_placeholderPaths.remove(oldPath);
                         m_localSignatures.remove(oldPath);
                         m_localMetadata.remove(oldPath);
                         m_pendingRemoteDeletePaths.remove(oldPath);
@@ -229,6 +234,7 @@ GraphClient::GraphClient(QObject *parent)
                             }
                         }
                         m_pendingUploads = std::move(remainingUploads);
+                        Q_EMIT placeholderStateChanged(placeholderPaths());
                     }
                     m_remotePathsById.remove(itemId);
                     m_remoteItemIds.remove(oldPath);
@@ -321,23 +327,36 @@ GraphClient::GraphClient(QObject *parent)
                     continue;
                 }
                 if (!oldPath.isEmpty() && oldPath != renamedPath) {
-                    const QString oldLocalPath = safeLocalPath(oldPath);
-                    const QString newLocalPath = safeLocalPath(renamedPath);
-                    if (QFileInfo(oldLocalPath).exists() && !QFileInfo(newLocalPath).exists()) {
+                    if (m_materializeFiles) {
+                        const QString oldLocalPath = safeLocalPath(oldPath);
+                        const QString newLocalPath = safeLocalPath(renamedPath);
+                        if (QFileInfo(oldLocalPath).exists() && !QFileInfo(newLocalPath).exists()) {
+                            QDir().mkpath(QFileInfo(newLocalPath).absolutePath());
+                            if (!QFile::rename(oldLocalPath, newLocalPath)) {
+                                Q_EMIT errorOccurred(QStringLiteral("Could not apply remote rename: %1 → %2")
+                                                         .arg(oldPath, renamedPath));
+                                continue;
+                            }
+                            log(QStringLiteral("Graph sync: renamed local %1 → %2")
+                                    .arg(oldPath, renamedPath));
+                            const QString signature = m_localSignatures.take(oldPath);
+                            if (!signature.isEmpty()) {
+                                m_localSignatures.insert(renamedPath, signature);
+                            }
+                            if (m_localMetadata.contains(oldPath)) {
+                                m_localMetadata.insert(renamedPath, m_localMetadata.take(oldPath));
+                            }
+                        }
+                    } else if (m_placeholderPaths.contains(oldPath)) {
+                        const QString oldLocalPath = safeLocalPath(oldPath);
+                        const QString newLocalPath = safeLocalPath(renamedPath);
                         QDir().mkpath(QFileInfo(newLocalPath).absolutePath());
-                        if (!QFile::rename(oldLocalPath, newLocalPath)) {
-                            Q_EMIT errorOccurred(QStringLiteral("Could not apply remote rename: %1 → %2")
-                                                     .arg(oldPath, renamedPath));
-                            continue;
-                        }
-                        log(QStringLiteral("Graph sync: renamed local %1 → %2")
-                                .arg(oldPath, renamedPath));
-                        const QString signature = m_localSignatures.take(oldPath);
-                        if (!signature.isEmpty()) {
-                            m_localSignatures.insert(renamedPath, signature);
-                        }
-                        if (m_localMetadata.contains(oldPath)) {
-                            m_localMetadata.insert(renamedPath, m_localMetadata.take(oldPath));
+                        if (QFile::rename(oldLocalPath, newLocalPath)) {
+                            m_placeholderPaths.remove(oldPath);
+                            m_placeholderPaths.insert(renamedPath);
+                            log(QStringLiteral("Graph sync: renamed local placeholder %1 → %2")
+                                    .arg(oldPath, renamedPath));
+                            Q_EMIT placeholderStateChanged(placeholderPaths());
                         }
                     }
                     m_remoteItemIds.remove(oldPath);
@@ -349,7 +368,7 @@ GraphClient::GraphClient(QObject *parent)
                 m_remotePathsById.insert(itemId, relativePath);
                 m_remoteItemIds.insert(relativePath, itemId);
                 m_remoteEtags.insert(itemId, eTag);
-                if (isIncluded(relativePath)) {
+                if (m_materializeFiles && isIncluded(relativePath)) {
                     m_pendingFiles.enqueue({itemId, relativePath,
                                             item.value(QStringLiteral("size")).toVariant().toLongLong()});
                 }
@@ -359,7 +378,7 @@ GraphClient::GraphClient(QObject *parent)
                 log(QStringLiteral("Graph sync: remote folder structure changed; refreshing selected tree"));
                 synchronize(m_deltaDriveId, m_deltaToken, m_syncDirectory,
                             m_includedFolders, m_excludedFolders);
-            } else if (!m_pendingFiles.isEmpty()) {
+            } else if (!m_pendingFiles.isEmpty() && m_materializeFiles) {
                 log(QStringLiteral("Graph sync: downloading %1 changed remote file(s)")
                              .arg(m_pendingFiles.size()));
                 m_totalFiles = m_pendingFiles.size();
@@ -436,6 +455,44 @@ void GraphClient::configureTransferConcurrency(int downloads, int uploads, int l
                     .arg(m_maxConcurrentLargeTransfers));
 }
 
+void GraphClient::setLocalAvailability(LocalAvailability availability)
+{
+    const bool materializeFiles = availability == LocalAvailability::KeepLocal;
+    if (m_materializeFiles && !materializeFiles) {
+        // Flip the guard before any cleanup so a timer callback cannot observe
+        // the evicted files and enqueue remote deletions during this switch.
+        m_materializeFiles = false;
+        if (m_activeDeleteReply) {
+            m_activeDeleteReply->abort();
+        }
+        // A local-only operation queued before the transition must not leak
+        // into the remote drive after the policy has become RemoteOnly.
+        m_pendingUploads.clear();
+        m_pendingRemoteDeletes.clear();
+        m_pendingRemoteRenames.clear();
+        m_pendingRemoteDeletePaths.clear();
+        m_uploadBatchActive = false;
+        // A policy transition has explicit meaning: remote content is no
+        // longer meant to occupy local storage. Evict only files represented
+        // by the known local baseline; unrelated user files remain untouched.
+        evictMaterializedFiles();
+        return;
+    }
+    m_materializeFiles = materializeFiles;
+}
+
+void GraphClient::setPlaceholderPaths(const QStringList &paths)
+{
+    m_placeholderPaths = QSet<QString>(paths.cbegin(), paths.cend());
+}
+
+QStringList GraphClient::placeholderPaths() const
+{
+    QStringList paths = m_placeholderPaths.values();
+    std::sort(paths.begin(), paths.end());
+    return paths;
+}
+
 void GraphClient::initializeLocalMonitoring(const QStringList &signatures,
                                             const QStringList &remotePaths,
                                             const QString &localDirectory)
@@ -481,8 +538,70 @@ void GraphClient::initializeLocalMonitoring(const QStringList &signatures,
             }
         }
     }
+    if (!m_materializeFiles) {
+        // Also enforce RemoteOnly after a restart, once the persisted local
+        // signatures have been loaded into memory.
+        evictMaterializedFiles();
+    }
     if (m_monitoringEnabled) {
         m_uploadTimer.start();
+    }
+}
+
+void GraphClient::evictMaterializedFiles()
+{
+    const QStringList localPaths = m_localSignatures.keys();
+    for (const QString &relativePath : localPaths) {
+        if (!isIncluded(relativePath)) {
+            continue;
+        }
+        const QString localPath = safeLocalPath(relativePath);
+        if (localPath.isEmpty()) {
+            continue;
+        }
+        if (QFileInfo::exists(localPath) && !QFile::remove(localPath)) {
+            Q_EMIT errorOccurred(QStringLiteral("Could not evict local file: %1")
+                                     .arg(relativePath));
+            continue;
+        }
+        createPlaceholder(relativePath);
+        log(QStringLiteral("Graph sync: evicted local %1 (Remote only)")
+                .arg(relativePath));
+    }
+    for (const QString &relativePath : localPaths) {
+        if (isIncluded(relativePath)) {
+            m_localSignatures.remove(relativePath);
+            m_localMetadata.remove(relativePath);
+        }
+    }
+    Q_EMIT placeholderStateChanged(placeholderPaths());
+}
+
+void GraphClient::createPlaceholder(const QString &relativePath)
+{
+    const QString localPath = safeLocalPath(relativePath);
+    if (localPath.isEmpty()) {
+        return;
+    }
+    QDir().mkpath(QFileInfo(localPath).absolutePath());
+    QFile placeholder(localPath);
+    if (QFileInfo(localPath).isDir()) {
+        return;
+    }
+    if (placeholder.exists() && QFileInfo(localPath).size() > 0
+        && !QFile::remove(localPath)) {
+        Q_EMIT errorOccurred(QStringLiteral("Could not evict local file: %1")
+                                 .arg(relativePath));
+        return;
+    }
+    if (!placeholder.exists()
+        && placeholder.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        placeholder.close();
+        m_placeholderPaths.insert(relativePath);
+        log(QStringLiteral("Graph sync: created local placeholder %1 (Remote only)")
+                .arg(relativePath));
+    } else if (placeholder.exists() && QFileInfo(localPath).size() == 0) {
+        m_placeholderPaths.insert(relativePath);
     }
 }
 
@@ -505,6 +624,12 @@ QStringList GraphClient::remotePaths() const
                       + QLatin1Char('\t') + m_remoteEtags.value(it.key()));
     }
     return result;
+}
+
+bool GraphClient::hasActiveTransfers() const
+{
+    return !m_activeDownloads.isEmpty() || !m_activeUploads.isEmpty()
+        || m_deleteInProgress || m_renameInProgress;
 }
 
 void GraphClient::fetchQuota(const QString &driveId, const QString &accessToken)
@@ -632,6 +757,10 @@ void GraphClient::synchronize(const QString &driveId, const QString &accessToken
     }
     m_syncDriveId = driveId;
     m_syncToken = accessToken;
+    // A forced resync stops polling first to prevent local uploads from
+    // racing the remote pull; the remote transfer scheduler must be enabled
+    // again for the queued files to actually download.
+    m_monitoringEnabled = true;
     m_syncDirectory = QDir::cleanPath(QFileInfo(localDirectory).absoluteFilePath());
     m_includedFolders = includedFolders;
     m_excludedFolders = excludedFolders;
@@ -671,6 +800,7 @@ void GraphClient::refreshSelectedFolders(const QString &driveId, const QString &
     m_syncDriveId = driveId;
     m_syncToken = accessToken;
     m_syncDirectory = QDir::cleanPath(QFileInfo(localDirectory).absoluteFilePath());
+    m_monitoringEnabled = true;
     m_includedFolders = includedFolders;
     m_excludedFolders = excludedFolders;
     m_pendingFolders.clear();
@@ -693,6 +823,14 @@ void GraphClient::processNextFolder()
 {
     if (m_pendingFolders.isEmpty()) {
         m_totalFiles = m_pendingFiles.size();
+        // Keep this diagnostic beside the scheduler boundary: enumeration can
+        // succeed while a stale service or a disabled materializer leaves the
+        // transfer queue untouched. It also makes forced remote refreshes
+        // auditable without dumping file contents or access tokens.
+        log(QStringLiteral("Graph sync: comparison queued %1 file(s), materialize=%2, monitoring=%3")
+                .arg(m_pendingFiles.size())
+                .arg(m_materializeFiles ? QStringLiteral("yes") : QStringLiteral("no"))
+                .arg(m_monitoringEnabled ? QStringLiteral("yes") : QStringLiteral("no")));
         processNextFile();
         return;
     }
@@ -754,7 +892,7 @@ void GraphClient::processNextFolder()
                 }
                 m_remoteFolderIds.insert(relativePath, item.value(QStringLiteral("id")).toString());
                 const QString localPath = safeLocalPath(relativePath);
-                if (!localPath.isEmpty() && !QDir().mkpath(localPath)) {
+                if (m_materializeFiles && !localPath.isEmpty() && !QDir().mkpath(localPath)) {
                     Q_EMIT errorOccurred(QStringLiteral("Could not create local folder: %1").arg(relativePath));
                     return;
                 }
@@ -765,9 +903,15 @@ void GraphClient::processNextFolder()
                 ++filesFound;
                 const QString itemId = item.value(QStringLiteral("id")).toString();
                 const QString eTag = item.value(QStringLiteral("eTag")).toString();
-                const bool alreadyCurrent = m_remoteItemIds.value(relativePath) == itemId
+                const QFileInfo localInfo(safeLocalPath(relativePath));
+                const qint64 remoteSize = item.value(QStringLiteral("size")).toVariant().toLongLong();
+                const bool localBaselineMatches = localInfo.isFile()
+                    && m_localSignatures.value(relativePath) == localFileSignature(localInfo.absoluteFilePath());
+                const bool sizeMatches = remoteSize < 0 || localInfo.size() == remoteSize;
+                const bool alreadyCurrent = !m_placeholderPaths.contains(relativePath)
+                    && m_remoteItemIds.value(relativePath) == itemId
                     && m_remoteEtags.value(itemId) == eTag
-                    && QFileInfo(safeLocalPath(relativePath)).exists();
+                    && localBaselineMatches && sizeMatches;
                 m_remotePathsById.insert(itemId, relativePath);
                 m_remoteEtags.insert(itemId, eTag);
                 m_remoteItemIds.insert(relativePath, itemId);
@@ -818,7 +962,7 @@ void GraphClient::processNextFolder()
                         m_remoteFolderIds.insert(relativePath, item.value(QStringLiteral("id")).toString());
                         if (isIncluded(relativePath)) {
                             const QString localPath = safeLocalPath(relativePath);
-                            if (!localPath.isEmpty()) {
+                            if (m_materializeFiles && !localPath.isEmpty()) {
                                 QDir().mkpath(localPath);
                             }
                             if (shouldTraverse(relativePath)) {
@@ -828,9 +972,17 @@ void GraphClient::processNextFolder()
                     } else if (item.contains(QStringLiteral("file")) && isIncluded(relativePath)) {
                         const QString itemId = item.value(QStringLiteral("id")).toString();
                         const QString eTag = item.value(QStringLiteral("eTag")).toString();
-                        const bool alreadyCurrent = m_remoteItemIds.value(relativePath) == itemId
+                        const QFileInfo localInfo(safeLocalPath(relativePath));
+                        const qint64 remoteSize = item.value(QStringLiteral("size"))
+                                                      .toVariant().toLongLong();
+                        const bool localBaselineMatches = localInfo.isFile()
+                            && m_localSignatures.value(relativePath)
+                                   == localFileSignature(localInfo.absoluteFilePath());
+                        const bool sizeMatches = remoteSize < 0 || localInfo.size() == remoteSize;
+                        const bool alreadyCurrent = !m_placeholderPaths.contains(relativePath)
+                            && m_remoteItemIds.value(relativePath) == itemId
                             && m_remoteEtags.value(itemId) == eTag
-                            && QFileInfo(safeLocalPath(relativePath)).exists();
+                            && localBaselineMatches && sizeMatches;
                         m_remotePathsById.insert(itemId, relativePath);
                         m_remoteEtags.insert(itemId, eTag);
                         m_remoteItemIds.insert(relativePath, itemId);
@@ -853,6 +1005,14 @@ void GraphClient::processNextFile()
 {
     // Transfer callbacks re-enter this scheduler. The delta cursor is
     // persisted only after every file in the page is durable on disk.
+    if (!m_materializeFiles) {
+        // A RemoteOnly pass acknowledges the remote page and persists its
+        // identity baseline, while leaving visible placeholders in the tree.
+        while (!m_pendingFiles.isEmpty()) {
+            createPlaceholder(m_pendingFiles.dequeue().relativePath);
+        }
+        Q_EMIT placeholderStateChanged(placeholderPaths());
+    }
     startPendingDownloads();
     if (m_pendingFiles.isEmpty() && m_activeDownloads.isEmpty()) {
         if (!m_deltaPageFailed && !m_pendingDeltaLink.isEmpty()) {
@@ -879,6 +1039,10 @@ void GraphClient::startPendingDownloads()
     if (!m_monitoringEnabled) {
         return;
     }
+    if (!m_pendingFiles.isEmpty()) {
+        log(QStringLiteral("Graph sync: starting download scheduler with %1 queued file(s), %2 active")
+                .arg(m_pendingFiles.size()).arg(m_activeDownloads.size()));
+    }
     // Small files may pass a queued video, while large transfers have a
     // separate cap so one video cannot occupy every download slot.
     while (m_activeDownloads.size() < m_maxConcurrentDownloads && !m_pendingFiles.isEmpty()) {
@@ -890,29 +1054,34 @@ void GraphClient::startPendingDownloads()
         }
         int selectedIndex = -1;
         for (int index = 0; index < m_pendingFiles.size(); ++index) {
-            const bool large = m_pendingFiles.at(index).size > largeUploadThreshold;
+            const GraphSyncFile &candidate = m_pendingFiles.at(index);
+            const bool large = candidate.size > largeUploadThreshold;
             if (!large || activeLarge < m_maxConcurrentLargeTransfers) {
                 selectedIndex = index;
                 break;
             }
         }
         if (selectedIndex < 0) {
+            // Every queued item is large and the independent large-transfer
+            // budget is full. Keep the queue intact; a completion callback
+            // will re-enter this scheduler and release the next item.
+            log(QStringLiteral("Graph sync: large-transfer limit reached; %1 file(s) remain queued")
+                    .arg(m_pendingFiles.size()));
             return;
         }
-        QQueue<GraphSyncFile> remaining;
-        GraphSyncFile file;
-        for (int index = 0; index < m_pendingFiles.size(); ++index) {
-            GraphSyncFile candidate = m_pendingFiles.dequeue();
-            if (index == selectedIndex) {
-                file = std::move(candidate);
-            } else {
-                remaining.enqueue(std::move(candidate));
-            }
-        }
-        m_pendingFiles = std::move(remaining);
+        // Remove exactly the selected item. Rebuilding the queue by repeated
+        // dequeue/move made this boundary unnecessarily hard to audit and
+        // could lose the tail item when transfers were started concurrently.
+        const GraphSyncFile file = m_pendingFiles.takeAt(selectedIndex);
         if (m_activeDownloads.contains(file.relativePath)) {
+            log(QStringLiteral("Graph sync: skipping already active download %1")
+                    .arg(file.relativePath));
             continue;
         }
+        log(QStringLiteral("Graph sync: scheduling download %1 (%2 MiB, %3 queued after selection)")
+                .arg(file.relativePath)
+                .arg(file.size / (1024 * 1024))
+                .arg(m_pendingFiles.size()));
         startDownload(file);
     }
 }
@@ -925,6 +1094,7 @@ void GraphClient::startDownload(const GraphSyncFile &file)
     const QString localPath = safeLocalPath(file.relativePath);
     if (localPath.isEmpty()) {
         Q_EMIT errorOccurred(QStringLiteral("Unsafe remote path rejected: %1").arg(file.relativePath));
+        processNextFile();
         return;
     }
     QDir().mkpath(QFileInfo(localPath).absolutePath());
@@ -935,6 +1105,7 @@ void GraphClient::startDownload(const GraphSyncFile &file)
     if (!transfer->output->open(QIODevice::WriteOnly)) {
         Q_EMIT errorOccurred(QStringLiteral("Could not open local file for download: %1")
                                  .arg(file.relativePath));
+        processNextFile();
         return;
     }
     m_activeDownloads.insert(file.relativePath, transfer);
@@ -1058,31 +1229,50 @@ void GraphClient::processDownloadedReply(QNetworkReply *reply,
             .arg(transfer->file.relativePath).arg(transfer->bytes / (1024 * 1024)));
     const QString signature = localFileSignature(transfer->localPath);
     if (!signature.isEmpty()) {
+        const bool wasPlaceholder = m_placeholderPaths.remove(transfer->file.relativePath) > 0;
         m_localSignatures.insert(transfer->file.relativePath, signature);
         const QFileInfo fileInfo(transfer->localPath);
         m_localMetadata.insert(transfer->file.relativePath,
                                {fileInfo.size(), fileInfo.lastModified()});
+        if (wasPlaceholder) {
+            Q_EMIT placeholderStateChanged(placeholderPaths());
+        }
     }
     ++m_downloadedFiles;
     Q_EMIT syncProgress(100, transfer->file.relativePath);
-    processNextFile();
+    logProgress(QStringLiteral("Graph sync: continuing download queue (%1 pending, %2 active)")
+                    .arg(m_pendingFiles.size()).arg(m_activeDownloads.size()));
+    // Large-file callbacks can finish while Qt is still unwinding the network
+    // reply. Schedule the next queue step after that callback has returned.
+    QTimer::singleShot(0, this, &GraphClient::processNextFile);
 }
 
 void GraphClient::scanLocalChanges()
 {
-    if (m_uploadInProgress || m_renameInProgress || m_syncDirectory.isEmpty()) {
+    if (!m_materializeFiles || m_renameInProgress || m_syncDirectory.isEmpty()) {
         return;
     }
+    // Scanning must continue while transfers are active: a newly copied small
+    // file should be added to the pending queue immediately instead of waiting
+    // for every earlier large upload to finish. m_pendingUploadPaths makes the
+    // scan idempotent for files already queued or in flight.
     QDirIterator iterator(m_syncDirectory, QDir::Files, QDirIterator::Subdirectories);
     QSet<QString> currentPaths;
     QHash<QString, QString> currentSignatures;
     while (iterator.hasNext()) {
         const QString localPath = iterator.next();
         const QString relativePath = QDir(m_syncDirectory).relativeFilePath(localPath);
-        if (!isIncluded(relativePath)) {
+        if (!isIncluded(relativePath) || m_placeholderPaths.contains(relativePath)) {
             continue;
         }
         currentPaths.insert(relativePath);
+        if (m_pendingUploadPaths.contains(relativePath)
+            || m_activeUploads.contains(relativePath)) {
+            // A queued or active upload already owns this snapshot. Rehashing
+            // large videos on every ten-second scan would block the Qt event
+            // loop, delaying transfer callbacks and D-Bus status requests.
+            continue;
+        }
         const QFileInfo fileInfo(localPath);
         const QPair<qint64, QDateTime> metadata{fileInfo.size(), fileInfo.lastModified()};
         // Hashing is intentionally the correctness fallback. For unchanged
@@ -1153,6 +1343,15 @@ void GraphClient::scanLocalChanges()
 
 void GraphClient::processPendingLocalOperations()
 {
+    if (!m_materializeFiles) {
+        // RemoteOnly is a hard boundary: no local observation may produce a
+        // remote mutation, including work that was queued before the switch.
+        m_pendingRemoteRenames.clear();
+        m_pendingRemoteDeletes.clear();
+        m_pendingRemoteDeletePaths.clear();
+        m_pendingUploads.clear();
+        return;
+    }
     if (m_renameInProgress || !m_pendingRemoteRenames.isEmpty()) {
         renameNextRemoteFile();
         return;
@@ -1163,7 +1362,7 @@ void GraphClient::processPendingLocalOperations()
 
 void GraphClient::renameNextRemoteFile()
 {
-    if (m_renameInProgress || m_pendingRemoteRenames.isEmpty()) {
+    if (!m_materializeFiles || m_renameInProgress || m_pendingRemoteRenames.isEmpty()) {
         return;
     }
     m_renameInProgress = true;
@@ -1213,7 +1412,7 @@ void GraphClient::renameNextRemoteFile()
 
 void GraphClient::deleteNextRemoteFile()
 {
-    if (m_deleteInProgress || m_pendingRemoteDeletes.isEmpty()) {
+    if (!m_materializeFiles || m_deleteInProgress || m_pendingRemoteDeletes.isEmpty()) {
         return;
     }
     m_deleteInProgress = true;
@@ -1225,8 +1424,18 @@ void GraphClient::deleteNextRemoteFile()
     log(QStringLiteral("Graph sync: deleting remote %1 (item %2)")
             .arg(file.relativePath, file.itemId));
     auto *reply = m_network.deleteResource(request);
+    m_activeDeleteReply = reply;
     connect(reply, &QNetworkReply::finished, this, [this, reply, file] {
         const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
+        if (m_activeDeleteReply == reply) {
+            m_activeDeleteReply.clear();
+        }
+        if (!m_materializeFiles) {
+            // The request was cancelled while entering RemoteOnly. Do not
+            // mutate baselines or start another remote deletion from here.
+            m_deleteInProgress = false;
+            return;
+        }
         if (reply->error() != QNetworkReply::NoError) {
             const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
             if (status == 404) {
@@ -1266,6 +1475,10 @@ void GraphClient::deleteNextRemoteFile()
 
 void GraphClient::uploadNextLocalFile()
 {
+    if (!m_materializeFiles) {
+        m_pendingUploads.clear();
+        return;
+    }
     startPendingUploads();
     if (m_uploadBatchActive && m_pendingUploads.isEmpty() && m_activeUploads.isEmpty()) {
         m_uploadBatchActive = false;
@@ -1302,21 +1515,20 @@ void GraphClient::startPendingUploads()
             }
         }
         if (selectedIndex < 0) {
+            // Keep large files queued until a large-transfer slot is freed;
+            // the next upload completion re-enters this scheduler.
+            log(QStringLiteral("Graph sync: large-upload limit reached; %1 file(s) remain queued")
+                    .arg(m_pendingUploads.size()));
             return;
         }
 
-        QQueue<GraphLocalFile> remaining;
-        GraphLocalFile selected;
-        for (int index = 0; index < m_pendingUploads.size(); ++index) {
-            GraphLocalFile candidate = m_pendingUploads.dequeue();
-            if (index == selectedIndex) {
-                selected = std::move(candidate);
-            } else {
-                remaining.enqueue(std::move(candidate));
-            }
-        }
-        m_pendingUploads = std::move(remaining);
+        // Remove exactly the selected item. Keeping the tail queue intact is
+        // essential when a folder scan discovers more files than the active
+        // upload limit.
+        const GraphLocalFile selected = m_pendingUploads.takeAt(selectedIndex);
         m_pendingUploadPaths.remove(selected.relativePath);
+        log(QStringLiteral("Graph sync: scheduling upload %1 (%2 queued after selection)")
+                .arg(selected.relativePath).arg(m_pendingUploads.size()));
         startUpload(selected);
     }
 }
@@ -1535,7 +1747,7 @@ bool GraphClient::isIncluded(const QString &relativePath) const
 
 bool GraphClient::shouldTraverse(const QString &relativePath) const
 {
-    if (!isIncluded(relativePath) && m_includedFolders.isEmpty()) {
+    if (!isIncluded(relativePath)) {
         return false;
     }
     if (m_includedFolders.isEmpty()) {
@@ -1544,8 +1756,13 @@ bool GraphClient::shouldTraverse(const QString &relativePath) const
     return std::any_of(m_includedFolders.cbegin(), m_includedFolders.cend(),
                        [&relativePath](const QString &included) {
         const QString normalized = normalizeFolderFilter(included);
-        return normalized.startsWith(relativePath + QLatin1Char('/'))
-            || normalized == relativePath;
+        // Traverse both when the selected folder is below the current node
+        // and when the current node is already an included ancestor. The
+        // latter is what makes Documentos/Videos visible when Documentos is
+        // selected at the first level.
+        return normalized == relativePath
+            || normalized.startsWith(relativePath + QLatin1Char('/'))
+            || relativePath.startsWith(normalized + QLatin1Char('/'));
     });
 }
 

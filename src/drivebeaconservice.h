@@ -50,10 +50,14 @@ public:
 public Q_SLOTS:
     /** Requests an immediate Graph synchronization pass. */
     void synchronizeGraph();
+    /** Rebuilds one profile's selected local tree from the remote drive. */
+    void forceRemoteResync(const QString &profileName);
     /** Requests a fresh first-level folder listing. */
     void refreshGraphFolders();
     /** Enables or pauses one named Graph profile without deleting its state. */
     void setProfileSyncEnabled(const QString &profileName, bool enabled);
+    /** Changes one profile's local availability policy without restarting it. */
+    void setProfileAvailability(const QString &profileName, const QString &availability);
     /** Pauses or resumes all Graph profiles while preserving their own flags. */
     void setGlobalSyncEnabled(bool enabled);
     /** Discovers newly saved Graph profiles without restarting the service. */

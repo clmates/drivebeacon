@@ -132,6 +132,11 @@ void DriveBeaconServiceClient::synchronizeGraph()
     call(QStringLiteral("synchronizeGraph"));
 }
 
+void DriveBeaconServiceClient::forceRemoteResync(const QString &profileName)
+{
+    call(QStringLiteral("forceRemoteResync"), {profileName});
+}
+
 void DriveBeaconServiceClient::refreshGraphFolders()
 {
     call(QStringLiteral("refreshGraphFolders"));
@@ -140,6 +145,12 @@ void DriveBeaconServiceClient::refreshGraphFolders()
 void DriveBeaconServiceClient::setProfileSyncEnabled(const QString &profileName, bool enabled)
 {
     call(QStringLiteral("setProfileSyncEnabled"), {profileName, enabled});
+}
+
+void DriveBeaconServiceClient::setProfileAvailability(const QString &profileName,
+                                                      const QString &availability)
+{
+    call(QStringLiteral("setProfileAvailability"), {profileName, availability});
 }
 
 void DriveBeaconServiceClient::setGlobalSyncEnabled(bool enabled)

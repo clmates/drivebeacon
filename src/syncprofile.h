@@ -50,6 +50,8 @@ struct SyncProfile {
     QStringList graphLocalSignatures;
     /** Persisted `itemId<TAB>relativePath<TAB>eTag` remote identity baseline. */
     QStringList graphRemotePaths;
+    /** Relative paths represented locally by zero-byte RemoteOnly placeholders. */
+    QStringList graphPlaceholderPaths;
     /** First-level remote folders explicitly selected for synchronization. */
     QStringList includedFolders;
     /** First-level remote folders explicitly excluded from synchronization. */

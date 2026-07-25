@@ -72,6 +72,8 @@ SyncProfile ProfileStore::load(const QString &requestedName) const
     // Graph client owns their tab-separated ID/path/eTag format and also reads
     // the older two-field ID/path format for backward compatibility.
     profile.graphRemotePaths = settings.value(QStringLiteral("graphRemotePaths")).toStringList();
+    profile.graphPlaceholderPaths = settings.value(QStringLiteral("graphPlaceholderPaths"))
+                                       .toStringList();
     profile.includedFolders = settings.value(QStringLiteral("includedFolders")).toStringList();
     profile.excludedFolders = settings.value(QStringLiteral("excludedFolders")).toStringList();
     profile.graphSyncedIncludedFolders = settings.value(
@@ -103,6 +105,7 @@ void ProfileStore::save(const SyncProfile &profile)
     settings.setValue(QStringLiteral("graphDeltaLink"), profile.graphDeltaLink);
     settings.setValue(QStringLiteral("graphLocalSignatures"), profile.graphLocalSignatures);
     settings.setValue(QStringLiteral("graphRemotePaths"), profile.graphRemotePaths);
+    settings.setValue(QStringLiteral("graphPlaceholderPaths"), profile.graphPlaceholderPaths);
     settings.setValue(QStringLiteral("includedFolders"), profile.includedFolders);
     settings.setValue(QStringLiteral("excludedFolders"), profile.excludedFolders);
     settings.setValue(QStringLiteral("graphSyncedIncludedFolders"),

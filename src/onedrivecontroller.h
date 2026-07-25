@@ -127,10 +127,14 @@ public:
     Q_INVOKABLE void completeGraphLogin(const QString &responseUrl);
     /** Starts a remote-to-local Graph synchronization for the active profile. */
     Q_INVOKABLE void synchronizeGraph();
+    /** Rebuilds the selected local tree from Graph without local mutations. */
+    Q_INVOKABLE void forceRemoteResync();
     /** Refreshes the first-level remote folder list for profile configuration. */
     Q_INVOKABLE void refreshGraphFolders();
     /** Enables or pauses this profile while retaining all synchronization state. */
     Q_INVOKABLE void setGraphSyncEnabled(bool enabled);
+    /** Changes local materialization policy without discarding sync baselines. */
+    Q_INVOKABLE void setAvailability(const QString &availability);
     /** Applies the global pause without changing this profile's own setting. */
     void setGlobalGraphSyncEnabled(bool enabled);
     /** Confirms migration of the discovered abraunegg configuration. */
@@ -195,4 +199,6 @@ private:
     bool m_globalGraphSyncEnabled = true;
     /** Effective runtime state after combining both pause switches and ownership. */
     bool m_graphSyncEnabled = true;
+    /** True when a force-remote request waits for current transfers to finish. */
+    bool m_forceRemoteResyncPending = false;
 };

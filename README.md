@@ -65,10 +65,15 @@ never written to the configuration file. On a later launch the wallet token is
 renewed automatically. If it is unavailable or revoked, connect the profile
 again from the configuration dialog.
 
-The current synchronization slice supports `Keep local copy`. `Remote only`
-and `Download on demand` are represented in the profile model and prevent local
-downloads until their filesystem-provider implementation is added. Delta state,
-conflict resolution, placeholders, and SharePoint libraries remain subsequent
+`Remote only` now synchronizes the selected remote tree, identities, eTags, and
+delta cursor while creating zero-byte placeholders at the remote paths. The
+placeholders are persisted and excluded from local change detection; remote
+renames and deletions update them without creating remote mutations. Switching
+to this policy evicts the corresponding local content, while files outside the
+known baseline remain untouched. `Download on demand` remains represented
+in the profile model but requires the future filesystem-provider integration;
+until then it reports that limitation instead of silently pretending to offer
+placeholders. SharePoint libraries and a filesystem provider remain subsequent
 roadmap steps.
 
 DriveBeacon is an independent open-source project. It is not affiliated with or
@@ -104,6 +109,7 @@ drivebeaconctl pause                 # pause all Graph accounts
 drivebeaconctl resume                # resume all Graph accounts
 drivebeaconctl pause-profile NAME    # pause one account
 drivebeaconctl resume-profile NAME   # resume one account
+drivebeaconctl set-availability NAME remote-only
 drivebeaconctl service start|stop|restart
 ```
 

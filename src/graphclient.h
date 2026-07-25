@@ -3,6 +3,7 @@
 #pragma once
 
 #include "storagequota.h"
+#include "syncprofile.h"
 
 #include <QNetworkAccessManager>
 #include <QUrl>
@@ -13,6 +14,7 @@
 #include <QDateTime>
 #include <QTimer>
 #include <QSet>
+#include <QPointer>
 
 #include <memory>
 
@@ -108,14 +110,22 @@ public:
     void stopMonitoring();
     /** Applies per-profile transfer limits before synchronization starts. */
     void configureTransferConcurrency(int downloads, int uploads, int largeTransfers);
+    /** Selects whether Graph content is materialized in the local directory. */
+    void setLocalAvailability(LocalAvailability availability);
     /** Restores local signatures and starts local change monitoring without a full scan. */
     void initializeLocalMonitoring(const QStringList &signatures,
                                    const QStringList &remotePaths,
                                    const QString &localDirectory);
+    /** Restores placeholder paths persisted for a RemoteOnly profile. */
+    void setPlaceholderPaths(const QStringList &paths);
+    /** Returns placeholder paths suitable for profile persistence. */
+    [[nodiscard]] QStringList placeholderPaths() const;
     /** Returns path/hash pairs suitable for profile persistence. */
     [[nodiscard]] QStringList localSignatures() const;
     /** Returns remote ID/path pairs suitable for profile persistence. */
     [[nodiscard]] QStringList remotePaths() const;
+    /** Returns whether a transfer or serialized remote mutation is active. */
+    [[nodiscard]] bool hasActiveTransfers() const;
 
 Q_SIGNALS:
     /** Emitted when Graph returns a valid quota snapshot. */
@@ -136,6 +146,8 @@ Q_SIGNALS:
     void logMessage(const QString &message);
     /** Emitted when the local baseline changes after a successful operation. */
     void localStateChanged(const QStringList &signatures, const QStringList &remotePaths);
+    /** Emitted when RemoteOnly placeholder paths change. */
+    void placeholderStateChanged(const QStringList &paths);
 
 private:
     /** Per-download state retained across Graph redirect and content replies. */
@@ -187,6 +199,10 @@ private:
     void processPendingLocalOperations();
     /** Returns whether a path is covered by the include/exclude profile policy. */
     [[nodiscard]] bool isIncluded(const QString &relativePath) const;
+    /** Removes materialized files when a profile switches to RemoteOnly. */
+    void evictMaterializedFiles();
+    /** Creates a zero-byte visible marker for a remote-only file. */
+    void createPlaceholder(const QString &relativePath);
     /** Returns whether a remote folder should be traversed during enumeration. */
     [[nodiscard]] bool shouldTraverse(const QString &relativePath) const;
     /** Converts a relative path into a confined local path or an empty path. */
@@ -216,6 +232,8 @@ private:
     QHash<QString, QString> m_remoteEtags;
     /** SHA-256 signatures of local files at the last persisted baseline. */
     QHash<QString, QString> m_localSignatures;
+    /** Paths occupied by zero-byte files that must never be uploaded. */
+    QSet<QString> m_placeholderPaths;
     /**
      * Metadata used to skip hashing files whose size and modification time
      * are unchanged since the previous local scan.
@@ -236,9 +254,13 @@ private:
     bool m_deltaPageFailed = false;
     /** Indicates that one or more uploads are active. */
     bool m_uploadInProgress = false;
+    /** False for RemoteOnly, where metadata is synchronized without content. */
+    bool m_materializeFiles = true;
     /** True while the current local-change batch still has queued work. */
     bool m_uploadBatchActive = false;
     bool m_deleteInProgress = false;
+    /** Active local-to-remote delete, aborted when entering RemoteOnly. */
+    QPointer<QNetworkReply> m_activeDeleteReply;
     bool m_renameInProgress = false;
     QSet<QString> m_pendingRemoteRenamePaths;
     QSet<QString> m_pendingUploadPaths;

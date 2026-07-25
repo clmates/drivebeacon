@@ -10,6 +10,7 @@
 #include <KStatusNotifierItem>
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QCoreApplication>
@@ -17,8 +18,10 @@
 #include <QLocale>
 #include <QMenu>
 #include <QInputDialog>
+#include <QHash>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QTimer>
 #include <QVariantMap>
 
 namespace {
@@ -92,6 +95,8 @@ int main(int argc, char *argv[])
     QAction *remoteQuotaAction = new QAction(&application);
     remoteQuotaAction->setEnabled(false);
     QAction *graphSyncAction = new QAction(&application);
+    QAction *forceRemoteResyncAction = new QAction(
+        i18n("Force remote resync"), &application);
     QAction *activityHeader = new QAction(i18n("Recent activity"), &application);
     activityHeader->setEnabled(false);
     QAction *emptyActivityAction = new QAction(
@@ -113,6 +118,7 @@ int main(int argc, char *argv[])
     popupMenu->addAction(directoryAction);
     popupMenu->addAction(remoteQuotaAction);
     popupMenu->addAction(graphSyncAction);
+    popupMenu->addAction(forceRemoteResyncAction);
     popupMenu->addMenu(accountsMenu);
     popupMenu->addSeparator();
     popupMenu->addAction(activityHeader);
@@ -269,58 +275,108 @@ int main(int argc, char *argv[])
                      &application, rebuildActivities);
     rebuildActivities();
 
+    struct AccountMenuItems {
+        QMenu *menu = nullptr;
+        QAction *connection = nullptr;
+        QAction *sync = nullptr;
+        QAction *local = nullptr;
+        QAction *remote = nullptr;
+        QAction *toggleSync = nullptr;
+        QAction *keepLocal = nullptr;
+        QAction *remoteOnly = nullptr;
+        QAction *onDemand = nullptr;
+        QAction *resync = nullptr;
+        QAction *primary = nullptr;
+        QActionGroup *availabilityGroup = nullptr;
+    };
+    QHash<QString, AccountMenuItems> accountMenus;
+    QAction *accountsStatus = accountsMenu->addAction(i18n("Service unavailable"));
+    accountsStatus->setEnabled(false);
+    accountsMenu->addSeparator();
+    accountsMenu->addAction(reloadProfilesAction);
+
     const auto rebuildAccounts = [&] {
-        accountsMenu->clear();
-        if (!serviceClient.available()) {
-            QAction *unavailable = accountsMenu->addAction(i18n("Service unavailable"));
-            unavailable->setEnabled(false);
-        } else if (serviceClient.graphProfiles().isEmpty()) {
-            QAction *empty = accountsMenu->addAction(i18n("No Graph accounts loaded"));
-            empty->setEnabled(false);
-        } else {
-            for (const QString &profile : serviceClient.graphProfiles()) {
-                const QVariantMap status = serviceClient.profileStatus(profile);
-                auto *accountMenu = accountsMenu->addMenu(profile);
-                if (status.isEmpty()) {
-                    QAction *loading = accountMenu->addAction(i18n("Loading account status…"));
-                    loading->setEnabled(false);
-                    continue;
-                }
-
-                const bool authenticated = status.value(QStringLiteral("authenticated")).toBool();
-                const QString syncStatus = status.value(QStringLiteral("syncStatus")).toString();
-                const int progress = status.value(QStringLiteral("syncProgress")).toInt();
-                QAction *connection = accountMenu->addAction(
-                    authenticated ? i18n("Connected") : i18n("Not connected"));
-                connection->setEnabled(false);
-                QAction *sync = accountMenu->addAction(
-                    i18n("Sync: %1 (%2%)", syncStatus, progress));
-                sync->setEnabled(false);
-                QAction *local = accountMenu->addAction(
-                    i18n("Local folder: %1",
-                         status.value(QStringLiteral("localDirectory")).toString()));
-                local->setEnabled(false);
-                QAction *remote = accountMenu->addAction(
-                    i18n("Remote storage: %1 used · %2 available · %3 total",
-                         formatBytes(status.value(QStringLiteral("quotaUsed")).toLongLong()),
-                         formatBytes(status.value(QStringLiteral("quotaRemaining")).toLongLong()),
-                         formatBytes(status.value(QStringLiteral("quotaTotal")).toLongLong())));
-                remote->setEnabled(false);
-
-                if (profile == serviceClient.primaryProfileName()) {
-                    QAction *primary = accountMenu->addAction(i18n("Primary account"));
-                    primary->setEnabled(false);
-                } else {
-                    QAction *makePrimary = accountMenu->addAction(i18n("Use as primary account"));
-                    QObject::connect(makePrimary, &QAction::triggered, &application,
-                                     [&serviceClient, profile] {
-                                         serviceClient.setPrimaryProfile(profile);
+        // Account menus and their actions are created once and never removed.
+        // DBusMenu keeps references to these QObjects even when the popup is
+        // closed, so clearing a live QMenu causes invalid exporter layouts.
+        const QStringList profiles = serviceClient.graphProfiles();
+        accountsStatus->setText(serviceClient.available()
+                                    ? (profiles.isEmpty() ? i18n("No Graph accounts loaded")
+                                                          : i18n("Graph accounts"))
+                                    : i18n("Service unavailable"));
+        for (const QString &profile : profiles) {
+            AccountMenuItems &items = accountMenus[profile];
+            if (!items.menu) {
+                items.menu = accountsMenu->addMenu(profile);
+                items.connection = items.menu->addAction(QString());
+                items.sync = items.menu->addAction(QString());
+                items.local = items.menu->addAction(QString());
+                items.remote = items.menu->addAction(QString());
+                items.toggleSync = items.menu->addAction(QString());
+                items.availabilityGroup = new QActionGroup(items.menu);
+                items.availabilityGroup->setExclusive(true);
+                auto addAvailabilityAction = [&](const QString &value) {
+                    QAction *action = items.menu->addAction(QString());
+                    action->setCheckable(true);
+                    items.availabilityGroup->addAction(action);
+                    QObject::connect(action, &QAction::triggered, &application,
+                                     [&serviceClient, profile, value] {
+                                         serviceClient.setProfileAvailability(profile, value);
                                      });
-                }
+                    return action;
+                };
+                items.keepLocal = addAvailabilityAction(QStringLiteral("keep-local"));
+                items.remoteOnly = addAvailabilityAction(QStringLiteral("remote-only"));
+                items.onDemand = addAvailabilityAction(QStringLiteral("on-demand"));
+                items.resync = items.menu->addAction(i18n("Force remote resync"));
+                items.primary = items.menu->addAction(QString());
+                QObject::connect(items.toggleSync, &QAction::triggered, &application,
+                                 [&serviceClient, profile] {
+                                     const QVariantMap current = serviceClient.profileStatus(profile);
+                                     serviceClient.setProfileSyncEnabled(
+                                         profile, !current.value(QStringLiteral("syncEnabled")).toBool());
+                                 });
+                QObject::connect(items.resync, &QAction::triggered, &application,
+                                 [&serviceClient, profile] {
+                                     serviceClient.forceRemoteResync(profile);
+                                 });
+                QObject::connect(items.primary, &QAction::triggered, &application,
+                                 [&serviceClient, profile] {
+                                     serviceClient.setPrimaryProfile(profile);
+                                 });
             }
+            const QVariantMap status = serviceClient.profileStatus(profile);
+            const bool loaded = !status.isEmpty();
+            const bool authenticated = status.value(QStringLiteral("authenticated")).toBool();
+            const bool syncEnabled = status.value(QStringLiteral("syncEnabled")).toBool();
+            const QString availability = status.value(QStringLiteral("availability")).toString();
+            items.menu->setEnabled(loaded);
+            items.connection->setText(loaded
+                                          ? (authenticated ? i18n("Connected") : i18n("Not connected"))
+                                          : i18n("Loading account status…"));
+            items.sync->setText(i18n("Sync: %1 (%2%)",
+                                     status.value(QStringLiteral("syncStatus")).toString(),
+                                     status.value(QStringLiteral("syncProgress")).toInt()));
+            items.local->setText(i18n("Local folder: %1",
+                                      status.value(QStringLiteral("localDirectory")).toString()));
+            items.remote->setText(i18n("Remote storage: %1 used · %2 available · %3 total",
+                                       formatBytes(status.value(QStringLiteral("quotaUsed")).toLongLong()),
+                                       formatBytes(status.value(QStringLiteral("quotaRemaining")).toLongLong()),
+                                       formatBytes(status.value(QStringLiteral("quotaTotal")).toLongLong())));
+            items.toggleSync->setText(syncEnabled ? i18n("Pause account") : i18n("Resume account"));
+            items.keepLocal->setText(i18n("Keep local"));
+            items.remoteOnly->setText(i18n("Remote only"));
+            items.onDemand->setText(i18n("Download on demand"));
+            items.keepLocal->setChecked(availability == QLatin1String("keep-local"));
+            items.remoteOnly->setChecked(availability == QLatin1String("remote-only"));
+            items.onDemand->setChecked(availability == QLatin1String("on-demand"));
+            items.toggleSync->setEnabled(loaded);
+            items.resync->setEnabled(loaded && authenticated && syncEnabled
+                                     && availability == QLatin1String("keep-local"));
+            items.primary->setText(profile == serviceClient.primaryProfileName()
+                                        ? i18n("Primary account") : i18n("Use as primary account"));
+            items.primary->setEnabled(profile != serviceClient.primaryProfileName());
         }
-        accountsMenu->addSeparator();
-        accountsMenu->addAction(reloadProfilesAction);
     };
 
     KAboutApplicationDialog aboutDialog(aboutData);
@@ -328,6 +384,12 @@ int main(int argc, char *argv[])
         aboutDialog.show();
         aboutDialog.raise();
         aboutDialog.activateWindow();
+    });
+    QObject::connect(forceRemoteResyncAction, &QAction::triggered, &application, [&] {
+        const QString profile = serviceClient.primaryProfileName();
+        if (!profile.isEmpty()) {
+            serviceClient.forceRemoteResync(profile);
+        }
     });
     QObject::connect(&tray, &KStatusNotifierItem::quitRequested,
                      &application, &QApplication::quit);
@@ -368,6 +430,11 @@ int main(int argc, char *argv[])
             ? serviceClient.graphAuthenticated() : controller.graphAuthenticated();
         graphSyncAction->setText(i18n("Graph sync: %1", syncStatus));
         graphSyncAction->setEnabled(!serviceControl && authenticated);
+        forceRemoteResyncAction->setEnabled(serviceClient.available()
+                                             && !serviceClient.primaryProfileName().isEmpty()
+                                             && authenticated && serviceClient.graphSyncEnabled()
+                                             && primaryStatus.value(QStringLiteral("availability"))
+                                                    .toString() == QLatin1String("keep-local"));
         const bool serviceAvailable = serviceClient.available() && graphService;
         pauseProfileAction->setText(serviceClient.graphSyncEnabled()
                                          ? i18n("Pause current account")

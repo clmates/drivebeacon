@@ -88,6 +88,7 @@ QVariantMap DriveBeaconService::profileStatus(const QString &profileName) const
     }
     status.insert(QStringLiteral("profileName"), controller->profileName());
     status.insert(QStringLiteral("backendName"), controller->backendName());
+    status.insert(QStringLiteral("availability"), controller->availabilityName());
     status.insert(QStringLiteral("authenticated"), controller->graphAuthenticated());
     status.insert(QStringLiteral("syncEnabled"), controller->graphSyncEnabled());
     status.insert(QStringLiteral("syncStatus"), controller->graphSyncStatus());
@@ -137,6 +138,13 @@ void DriveBeaconService::synchronizeGraph()
     }
 }
 
+void DriveBeaconService::forceRemoteResync(const QString &profileName)
+{
+    if (auto *controller = m_controllers.value(profileName.trimmed(), nullptr)) {
+        controller->forceRemoteResync();
+    }
+}
+
 void DriveBeaconService::refreshGraphFolders()
 {
     if (auto *controller = activeController()) {
@@ -148,6 +156,15 @@ void DriveBeaconService::setProfileSyncEnabled(const QString &profileName, bool 
 {
     if (auto *controller = m_controllers.value(profileName.trimmed(), nullptr)) {
         controller->setGraphSyncEnabled(enabled);
+        publishStatus();
+    }
+}
+
+void DriveBeaconService::setProfileAvailability(const QString &profileName,
+                                                const QString &availability)
+{
+    if (auto *controller = m_controllers.value(profileName.trimmed(), nullptr)) {
+        controller->setAvailability(availability);
         publishStatus();
     }
 }

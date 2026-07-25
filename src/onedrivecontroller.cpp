@@ -44,6 +44,10 @@ OneDriveController::OneDriveController(const QString &profileName,
     , m_syncDirectory(m_profile.localDirectory)
     , m_autoStartGraphSync(autoStartGraphSync)
 {
+    // Configure materialization before any restored delta or initial scan is
+    // started; RemoteOnly must never enqueue local content transfers.
+    m_graphClient.setLocalAvailability(m_profile.availability);
+    m_graphClient.setPlaceholderPaths(m_profile.graphPlaceholderPaths);
     m_globalGraphSyncEnabled = m_profileStore.globalSyncEnabled();
     m_graphSyncEnabled = m_autoStartGraphSync && m_profile.syncEnabled
         && m_globalGraphSyncEnabled;
@@ -142,8 +146,7 @@ OneDriveController::OneDriveController(const QString &profileName,
                 if (!m_graphSyncEnabled) {
                     return;
                 }
-                if (m_autoStartGraphSync && (m_profile.graphDeltaLink.isEmpty()
-                    || m_profile.graphLocalSignatures.isEmpty()
+                if (m_autoStartGraphSync && (m_profile.graphLocalSignatures.isEmpty()
                     || m_profile.graphRemotePaths.isEmpty())) {
                     synchronizeGraph();
                 } else if (m_profile.graphSyncedIncludedFolders != m_profile.includedFolders
@@ -212,6 +215,13 @@ OneDriveController::OneDriveController(const QString &profileName,
                 Q_EMIT graphSyncChanged();
             });
     connect(&m_graphClient, &GraphClient::syncFinished, this, [this] {
+        if (m_forceRemoteResyncPending) {
+            // Upload completion also emits syncFinished. Defer the full pull
+            // until that callback has released the active transfer state.
+            m_forceRemoteResyncPending = false;
+            QTimer::singleShot(0, this, &OneDriveController::forceRemoteResync);
+            return;
+        }
         m_profile.graphSyncedIncludedFolders = m_profile.includedFolders;
         m_profile.graphSyncedExcludedFolders = m_profile.excludedFolders;
         m_profileStore.save(m_profile);
@@ -234,6 +244,11 @@ OneDriveController::OneDriveController(const QString &profileName,
             [this](const QStringList &signatures, const QStringList &remotePaths) {
         m_profile.graphLocalSignatures = signatures;
         m_profile.graphRemotePaths = remotePaths;
+        m_profileStore.save(m_profile);
+    });
+    connect(&m_graphClient, &GraphClient::placeholderStateChanged, this,
+            [this](const QStringList &paths) {
+        m_profile.graphPlaceholderPaths = paths;
         m_profileStore.save(m_profile);
     });
     connect(&m_graphClient, &GraphClient::logMessage, this,
@@ -538,8 +553,8 @@ void OneDriveController::synchronizeGraph()
         || m_profile.remoteDriveId.isEmpty() || !m_graphSyncEnabled) {
         return;
     }
-    if (m_profile.availability != LocalAvailability::KeepLocal) {
-        m_graphSyncStatus = QStringLiteral("Remote-only policy: local download disabled");
+    if (m_profile.availability == LocalAvailability::OnDemand) {
+        m_graphSyncStatus = QStringLiteral("On-demand policy requires filesystem provider");
         m_graphSyncProgress = 0;
         Q_EMIT graphSyncChanged();
         return;
@@ -557,6 +572,39 @@ void OneDriveController::synchronizeGraph()
     m_graphClient.synchronize(m_profile.remoteDriveId, m_graphTokens.accessToken,
                               m_profile.localDirectory, m_profile.includedFolders,
                               m_profile.excludedFolders);
+}
+
+void OneDriveController::forceRemoteResync()
+{
+    if (m_profile.backend != SyncBackend::MicrosoftGraph || !graphAuthenticated()
+        || m_profile.remoteDriveId.isEmpty() || !m_graphSyncEnabled) {
+        return;
+    }
+    if (m_profile.availability == LocalAvailability::OnDemand) {
+        m_graphSyncStatus = QStringLiteral("On-demand policy requires filesystem provider");
+        m_graphSyncProgress = 0;
+        Q_EMIT graphSyncChanged();
+        return;
+    }
+    if (m_graphClient.hasActiveTransfers()) {
+        m_forceRemoteResyncPending = true;
+        m_graphSyncStatus = QStringLiteral("Waiting for active transfer before remote resync");
+        Q_EMIT graphSyncChanged();
+        return;
+    }
+    // Keep the identity index, eTags, and local signatures. The folder walk
+    // then downloads only missing or changed files, including nested folders.
+    m_graphClient.stopMonitoring();
+    m_graphClient.initializeLocalMonitoring(m_profile.graphLocalSignatures,
+                                            m_profile.graphRemotePaths,
+                                            m_profile.localDirectory);
+    m_graphClient.configureTransferConcurrency(
+        m_profile.concurrentDownloads, m_profile.concurrentUploads,
+        m_profile.concurrentLargeTransfers);
+    m_graphClient.refreshSelectedFolders(
+        m_profile.remoteDriveId, m_graphTokens.accessToken,
+        m_profile.localDirectory, m_profile.includedFolders,
+        m_profile.excludedFolders);
 }
 
 void OneDriveController::setGraphSyncEnabled(bool enabled)
@@ -582,8 +630,7 @@ void OneDriveController::setGraphSyncEnabled(bool enabled)
     m_graphClient.configureTransferConcurrency(
         m_profile.concurrentDownloads, m_profile.concurrentUploads,
         m_profile.concurrentLargeTransfers);
-    if (m_profile.graphDeltaLink.isEmpty() || m_profile.graphLocalSignatures.isEmpty()
-        || m_profile.graphRemotePaths.isEmpty()) {
+    if (m_profile.graphLocalSignatures.isEmpty() || m_profile.graphRemotePaths.isEmpty()) {
         synchronizeGraph();
         return;
     }
@@ -593,6 +640,39 @@ void OneDriveController::setGraphSyncEnabled(bool enabled)
     m_graphSyncStatus = QStringLiteral("Completed");
     m_graphSyncProgress = 100;
     Q_EMIT graphSyncChanged();
+}
+
+void OneDriveController::setAvailability(const QString &availability)
+{
+    const QString normalized = availability.trimmed().toLower();
+    if (normalized != QLatin1String("keep-local")
+        && normalized != QLatin1String("remote-only")
+        && normalized != QLatin1String("on-demand")) {
+        setJournalError(QStringLiteral("Unknown availability policy: %1").arg(availability));
+        return;
+    }
+    const LocalAvailability next = localAvailabilityFromName(normalized);
+    if (next == m_profile.availability) {
+        return;
+    }
+    m_profile.availability = next;
+    m_profileStore.save(m_profile);
+    m_graphClient.setLocalAvailability(next);
+    Q_EMIT profileChanged();
+    if (m_profile.backend != SyncBackend::MicrosoftGraph || !m_graphSyncEnabled) {
+        return;
+    }
+    m_graphClient.stopMonitoring();
+    if (next == LocalAvailability::OnDemand) {
+        m_graphSyncStatus = QStringLiteral("On-demand policy requires filesystem provider");
+        m_graphSyncProgress = 0;
+        Q_EMIT graphSyncChanged();
+        return;
+    }
+    // Keep the existing cursor and baseline when possible. Switching from
+    // RemoteOnly to KeepLocal naturally materializes missing content when the
+    // local signature baseline no longer proves the files are present.
+    setGraphSyncEnabled(true);
 }
 
 void OneDriveController::setGlobalGraphSyncEnabled(bool enabled)

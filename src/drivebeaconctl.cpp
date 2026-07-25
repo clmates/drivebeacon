@@ -67,6 +67,7 @@ int printStatus()
         const QVariantMap profileValues = profileReply.value();
         output << "\nProfile: " << profileValues.value(QStringLiteral("profileName")).toString()
                << "\n  Backend: " << profileValues.value(QStringLiteral("backendName")).toString()
+               << "\n  Availability: " << profileValues.value(QStringLiteral("availability")).toString()
                << "\n  Authenticated: "
                << (profileValues.value(QStringLiteral("authenticated")).toBool() ? "yes" : "no")
                << "\n  Sync: "
@@ -142,7 +143,8 @@ int main(int argc, char *argv[])
         QStringLiteral("command"),
         QStringLiteral("status, sync, refresh-folders, reload-profiles, pause, resume, "
                        "pause-profile <name>, resume-profile <name>, or service "
-                       "<start|stop|restart>"));
+                       "<start|stop|restart>; set-availability <name> "
+                       "<keep-local|remote-only|on-demand>"));
     parser.process(application);
 
     const QStringList arguments = parser.positionalArguments();
@@ -173,6 +175,10 @@ int main(int argc, char *argv[])
         && arguments.size() == 2) {
         return callServiceMethod(QStringLiteral("setProfileSyncEnabled"),
                                  {arguments.at(1), command == QStringLiteral("resume-profile")});
+    }
+    if (command == QStringLiteral("set-availability") && arguments.size() == 3) {
+        return callServiceMethod(QStringLiteral("setProfileAvailability"),
+                                 {arguments.at(1), arguments.at(2)});
     }
     if (command == QStringLiteral("service") && arguments.size() == 2) {
         const QString action = arguments.at(1);

@@ -52,10 +52,14 @@ public Q_SLOTS:
     void refresh();
     /** Requests a synchronization pass from the service. */
     void synchronizeGraph();
+    /** Rebuilds one named profile locally from its selected remote tree. */
+    void forceRemoteResync(const QString &profileName);
     /** Requests a non-destructive remote folder refresh. */
     void refreshGraphFolders();
     /** Pauses or resumes one named profile through the service. */
     void setProfileSyncEnabled(const QString &profileName, bool enabled);
+    /** Changes one named profile's local availability through the service. */
+    void setProfileAvailability(const QString &profileName, const QString &availability);
     /** Pauses or resumes all profiles through the service. */
     void setGlobalSyncEnabled(bool enabled);
     /** Requests discovery of profiles saved after the service started. */
