@@ -115,6 +115,10 @@ public:
     void setLocalAvailability(LocalAvailability availability);
     /** Applies persisted path overrides; descendants inherit the nearest rule. */
     void setPathPolicies(const QStringList &policies);
+    /** Returns path policies in the persisted path<TAB>availability format. */
+    [[nodiscard]] QStringList pathPolicies() const;
+    /** Sets one file/folder policy; descendants inherit folder policies. */
+    void setPathPolicy(const QString &relativePath, LocalAvailability availability);
     /** Restores local signatures and starts local change monitoring without a full scan. */
     void initializeLocalMonitoring(const QStringList &signatures,
                                    const QStringList &remotePaths,
@@ -133,6 +137,8 @@ public:
     [[nodiscard]] QVariantList remoteEntries() const;
     /** Queues one remote file for a foreground filesystem read. */
     void materializeFile(const QString &relativePath);
+    /** Materializes one file or all files below a selected folder. */
+    void materializePath(const QString &relativePath);
     /** Evicts cached content without issuing any remote deletion. */
     void evictPath(const QString &relativePath);
 
@@ -157,6 +163,8 @@ Q_SIGNALS:
     void localStateChanged(const QStringList &signatures, const QStringList &remotePaths);
     /** Emitted when RemoteOnly placeholder paths change. */
     void placeholderStateChanged(const QStringList &paths);
+    /** Emitted when a Dolphin/CLI path policy changes. */
+    void pathPoliciesChanged(const QStringList &policies);
 
 private:
     /** Per-download state retained across Graph redirect and content replies. */
@@ -172,6 +180,8 @@ private:
     void processNextFolder();
     /** Continues the queued remote file downloads. */
     void processNextFile();
+    /** Queues a confirmed file after availability and path validation. */
+    void queueMaterialization(const QString &relativePath, const QString &itemId);
     /** Starts as many queued downloads as the concurrency budget allows. */
     void startPendingDownloads();
     /** Starts one independent streaming download transfer. */
@@ -214,6 +224,8 @@ private:
     void createPlaceholder(const QString &relativePath);
     /** Returns whether a remote folder should be traversed during enumeration. */
     [[nodiscard]] bool shouldTraverse(const QString &relativePath) const;
+    /** Identifies folder paths before they can enter the file transfer queue. */
+    [[nodiscard]] bool isRemoteFolderPath(const QString &relativePath) const;
     /** Converts a relative path into a confined local path or an empty path. */
     [[nodiscard]] QString safeLocalPath(const QString &relativePath) const;
     /** Resolves the nearest inherited availability policy for a path. */

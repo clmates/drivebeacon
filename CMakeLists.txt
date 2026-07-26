@@ -35,10 +35,12 @@ find_package(Qt6 6.7 REQUIRED COMPONENTS
 find_package(KF6 6.0 REQUIRED COMPONENTS
     CoreAddons
     I18n
+    KIO
     StatusNotifierItem
     Wallet
     XmlGui
 )
+include("${KF6CoreAddons_DIR}/KF6CoreAddonsMacros.cmake")
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FUSE3 REQUIRED IMPORTED_TARGET fuse3)
 

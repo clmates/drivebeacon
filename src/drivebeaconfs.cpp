@@ -3,9 +3,11 @@
 #include <QCoreApplication>
 #include <QCommandLineParser>
 #include <QDBusArgument>
+#include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusMessage>
 #include <QDBusReply>
+#include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
@@ -22,6 +24,7 @@
 #include <ctime>
 #include <cstring>
 #include <fcntl.h>
+#include <memory>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
@@ -35,6 +38,16 @@ struct FileSystemContext {
     QString profile;
     QString backingDirectory;
     QDBusInterface service;
+    QVariantList entrySnapshot;
+    qint64 entrySnapshotTimestampMs = 0;
+    bool entrySnapshotValid = false;
+};
+
+/** Defers remote materialization until a caller actually requests bytes. */
+struct OpenFile {
+    QString relativePath;
+    qint64 expectedSize = -1;
+    std::unique_ptr<QFile> file;
 };
 
 FileSystemContext *context()
@@ -61,14 +74,31 @@ QString localPath(const QString &relative)
 /** Reads the last enumerated remote tree from the headless service. */
 QVariantList remoteEntries()
 {
-    const QDBusReply<QVariantList> reply = context()->service.call(
-        QStringLiteral("remoteEntries"), context()->profile);
+    auto *fs = context();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    // Dolphin commonly asks for the same directory metadata repeatedly while
+    // opening a view. Keep one short-lived snapshot so those callbacks do not
+    // serialize a D-Bus round trip for every file.
+    if (fs->entrySnapshotValid && now - fs->entrySnapshotTimestampMs < 2000) {
+        return fs->entrySnapshot;
+    }
+
+    QDBusMessage request = QDBusMessage::createMethodCall(
+        QString::fromLatin1(serviceName), QString::fromLatin1(objectPath),
+        QString::fromLatin1(interfaceName), QStringLiteral("remoteEntries"));
+    request << fs->profile;
+    const QDBusMessage response = QDBusConnection::sessionBus().call(
+        request, QDBus::Block, 3000);
+    const QDBusReply<QVariantList> reply(response);
     if (!reply.isValid()) {
         qWarning().noquote() << "DriveBeacon FUSE: remoteEntries failed:"
                              << reply.error().message();
         return {};
     }
-    return reply.value();
+    fs->entrySnapshot = reply.value();
+    fs->entrySnapshotTimestampMs = now;
+    fs->entrySnapshotValid = true;
+    return fs->entrySnapshot;
 }
 
 /** Converts one D-Bus a{sv} record into a map usable by the FUSE tree. */
@@ -95,10 +125,9 @@ QVariantMap entryMap(const QVariant &value)
     return result;
 }
 
-/** Finds one file or folder metadata record by its relative path. */
-QVariantMap findEntry(const QString &relative)
+/** Finds one file or folder metadata record in an already fetched snapshot. */
+QVariantMap findEntryIn(const QVariantList &entries, const QString &relative)
 {
-    const QVariantList entries = remoteEntries();
     for (const QVariant &value : entries) {
         const QVariantMap entry = entryMap(value);
         if (entry.value(QStringLiteral("path")).toString() == relative) {
@@ -120,12 +149,18 @@ QVariantMap findEntry(const QString &relative)
     return {};
 }
 
+/** Fetches the service snapshot and finds one remote entry. */
+QVariantMap findEntry(const QString &relative)
+{
+    return findEntryIn(remoteEntries(), relative);
+}
+
 /** Returns immediate children so FUSE can expose a stable remote directory. */
-QList<QPair<QString, bool>> childrenOf(const QString &parent)
+QList<QPair<QString, bool>> childrenOf(const QVariantList &entries, const QString &parent)
 {
     QMap<QString, bool> children;
     const QString prefix = parent.isEmpty() ? QString() : parent + QLatin1Char('/');
-    for (const QVariant &value : remoteEntries()) {
+    for (const QVariant &value : entries) {
         const QVariantMap entry = entryMap(value);
         const QString path = entry.value(QStringLiteral("path")).toString();
         if (!path.startsWith(prefix)) {
@@ -153,8 +188,43 @@ QList<QPair<QString, bool>> childrenOf(const QString &parent)
     return result;
 }
 
+/** Supplies stat data from the same snapshot used to fill a directory. */
+bool statFromEntry(const QString &relative, const QVariantMap &entry, struct stat *st)
+{
+    if (entry.isEmpty()) {
+        return false;
+    }
+    std::memset(st, 0, sizeof(*st));
+    st->st_uid = getuid();
+    st->st_gid = getgid();
+    st->st_atime = st->st_mtime = st->st_ctime = std::time(nullptr);
+    if (entry.value(QStringLiteral("folder")).toBool()) {
+        st->st_mode = S_IFDIR | 0555;
+        st->st_nlink = 2;
+        st->st_size = 4096;
+    } else {
+        st->st_mode = S_IFREG | 0444;
+        st->st_nlink = 1;
+        qint64 size = entry.value(QStringLiteral("size")).toLongLong();
+        if (!entry.value(QStringLiteral("sizeKnown")).toBool()
+            && !entry.value(QStringLiteral("placeholder")).toBool()) {
+            // A legacy baseline may not contain remote sizes. When the cache
+            // already has materialized content, expose that size to clients.
+            const QFileInfo cached(localPath(relative));
+            if (cached.isFile()) {
+                size = cached.size();
+            }
+        }
+        st->st_size = size;
+    }
+    return true;
+}
+
 int requestMaterialization(const QString &relative, qint64 expectedSize)
 {
+    // The service may discover that a legacy zero-byte entry is a folder while
+    // handling this request. Do not keep using the pre-request FUSE snapshot.
+    context()->entrySnapshotValid = false;
     const QDBusMessage reply = context()->service.call(
         QStringLiteral("materializeFile"), context()->profile, relative);
     if (reply.type() == QDBusMessage::ErrorMessage) {
@@ -166,6 +236,12 @@ int requestMaterialization(const QString &relative, qint64 expectedSize)
     while (timer.elapsed() < 30 * 60 * 1000) {
         const QFileInfo info(path);
         const QVariantMap entry = findEntry(relative);
+        if (entry.value(QStringLiteral("folder")).toBool()) {
+            // Dolphin may have attempted to open a stale regular-file view of
+            // an empty remote folder. Return promptly so it can re-stat it as
+            // a directory instead of waiting for the materialization timeout.
+            return -EISDIR;
+        }
         const bool placeholder = entry.value(QStringLiteral("placeholder")).toBool();
         if (info.isFile() && !placeholder
             && (expectedSize < 0 || info.size() == expectedSize)) {
@@ -179,10 +255,6 @@ int requestMaterialization(const QString &relative, qint64 expectedSize)
 /** Supplies remote size and directory mode to applications without downloading data. */
 int fsGetattr(const char *path, struct stat *st, struct fuse_file_info *)
 {
-    std::memset(st, 0, sizeof(*st));
-    st->st_uid = getuid();
-    st->st_gid = getgid();
-    st->st_atime = st->st_mtime = st->st_ctime = std::time(nullptr);
     const QString relative = relativePath(path);
     qInfo().noquote() << "DriveBeacon FUSE: getattr"
                       << (relative.isEmpty() ? QStringLiteral("/") : relative);
@@ -196,27 +268,7 @@ int fsGetattr(const char *path, struct stat *st, struct fuse_file_info *)
         qWarning().noquote() << "DriveBeacon FUSE: getattr missing remote path" << relative;
         return -ENOENT;
     }
-    if (entry.value(QStringLiteral("folder")).toBool()) {
-        st->st_mode = S_IFDIR | 0555;
-        st->st_nlink = 2;
-        st->st_size = 4096;
-    } else {
-        st->st_mode = S_IFREG | 0444;
-        st->st_nlink = 1;
-        qint64 size = entry.value(QStringLiteral("size")).toLongLong();
-        if (!entry.value(QStringLiteral("sizeKnown")).toBool()
-            && !entry.value(QStringLiteral("placeholder")).toBool()) {
-            // A legacy baseline may not contain remote sizes. When the cache
-            // already has materialized content, expose that size so clients
-            // such as Dolphin do not suppress the subsequent read request.
-            const QFileInfo cached(localPath(relative));
-            if (cached.isFile()) {
-                size = cached.size();
-            }
-        }
-        st->st_size = size;
-    }
-    return 0;
+    return statFromEntry(relative, entry, st) ? 0 : -ENOENT;
 }
 
 /** Lists only the immediate children of a remote directory. */
@@ -224,7 +276,11 @@ int fsReaddir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t,
               struct fuse_file_info *, enum fuse_readdir_flags)
 {
     const QString relative = relativePath(path);
-    if (!relative.isEmpty() && !findEntry(relative).value(QStringLiteral("folder")).toBool()) {
+    // Reuse one snapshot for the complete directory response. Dolphin can
+    // request hundreds of child attributes while opening a folder; issuing a
+    // synchronous D-Bus call for every child made the UI appear frozen.
+    const QVariantList entries = remoteEntries();
+    if (!relative.isEmpty() && !findEntryIn(entries, relative).value(QStringLiteral("folder")).toBool()) {
         qWarning().noquote() << "DriveBeacon FUSE: readdir requested for non-directory" << relative;
         return -ENOTDIR;
     }
@@ -233,13 +289,12 @@ int fsReaddir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t,
         filler(buffer, "..", nullptr, 0, static_cast<fuse_fill_dir_flags>(0)) != 0) {
         return 0;
     }
-    for (const auto &[name, folder] : childrenOf(relative)) {
+    for (const auto &[name, folder] : childrenOf(entries, relative)) {
         Q_UNUSED(folder)
         const QString childPath = relative.isEmpty()
             ? name : relative + QLatin1Char('/') + name;
         struct stat childStat{};
-        const bool hasMetadata = fsGetattr(
-            childPath.toUtf8().constData(), &childStat, nullptr) == 0;
+        const bool hasMetadata = statFromEntry(childPath, findEntryIn(entries, childPath), &childStat);
         const QByteArray encodedName = name.toUtf8();
         qInfo().noquote() << "DriveBeacon FUSE: readdir entry" << childPath
                           << "metadata" << hasMetadata;
@@ -254,11 +309,15 @@ int fsReaddir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t,
     return 0;
 }
 
-/** Materializes a remote file on first open, then exposes a read-only handle. */
+/** Validates a remote file and creates a lazy, read-only FUSE handle. */
 int fsOpen(const char *path, struct fuse_file_info *info)
 {
     const QString relative = relativePath(path);
-    qInfo().noquote() << "DriveBeacon FUSE: open" << relative;
+    // Keep the flags in the diagnostic: desktop environments may open a
+    // placeholder merely to sniff its MIME type, which is distinct from an
+    // application opening it for actual content access.
+    qInfo().noquote() << "DriveBeacon FUSE: open" << relative
+                      << QStringLiteral("flags=0x") + QString::number(info->flags, 16);
     const QVariantMap entry = findEntry(relative);
     if (entry.isEmpty() || entry.value(QStringLiteral("folder")).toBool()) {
         qWarning().noquote() << "DriveBeacon FUSE: open missing or directory" << relative;
@@ -270,19 +329,10 @@ int fsOpen(const char *path, struct fuse_file_info *info)
     }
     const qint64 size = entry.value(QStringLiteral("sizeKnown")).toBool()
         ? entry.value(QStringLiteral("size")).toLongLong() : -1;
-    const int result = requestMaterialization(relative, size);
-    if (result != 0) {
-        qWarning().noquote() << "DriveBeacon FUSE: materialization failed" << relative << result;
-        return result;
-    }
-    auto *file = new QFile(localPath(relative));
-    if (!file->open(QIODevice::ReadOnly)) {
-        qWarning().noquote() << "DriveBeacon FUSE: cache open failed" << localPath(relative)
-                             << file->errorString();
-        delete file;
-        return -EIO;
-    }
-    qInfo().noquote() << "DriveBeacon FUSE: opened cache" << relative << file->size();
+    // Dolphin may open a placeholder only to inspect it before constructing a
+    // context menu. Delaying the network operation until fsRead prevents that
+    // metadata probe from unexpectedly downloading the selected file.
+    auto *file = new OpenFile{relative, size, nullptr};
     info->fh = reinterpret_cast<quintptr>(file);
     return 0;
 }
@@ -290,17 +340,37 @@ int fsOpen(const char *path, struct fuse_file_info *info)
 /** Reads from the service-backed cache after FUSE has validated the offset. */
 int fsRead(const char *, char *buffer, size_t size, off_t offset, struct fuse_file_info *info)
 {
-    auto *file = reinterpret_cast<QFile *>(info->fh);
-    if (!file || !file->seek(offset)) {
+    auto *openFile = reinterpret_cast<OpenFile *>(info->fh);
+    if (!openFile) {
         return -EIO;
     }
-    return static_cast<int>(file->read(buffer, static_cast<qint64>(size)));
+    if (!openFile->file) {
+        const int result = requestMaterialization(openFile->relativePath, openFile->expectedSize);
+        if (result != 0) {
+            qWarning().noquote() << "DriveBeacon FUSE: materialization failed"
+                                 << openFile->relativePath << result;
+            return result;
+        }
+        auto file = std::make_unique<QFile>(localPath(openFile->relativePath));
+        if (!file->open(QIODevice::ReadOnly)) {
+            qWarning().noquote() << "DriveBeacon FUSE: cache open failed"
+                                 << localPath(openFile->relativePath) << file->errorString();
+            return -EIO;
+        }
+        qInfo().noquote() << "DriveBeacon FUSE: opened cache" << openFile->relativePath
+                          << file->size();
+        openFile->file = std::move(file);
+    }
+    if (!openFile->file->seek(offset)) {
+        return -EIO;
+    }
+    return static_cast<int>(openFile->file->read(buffer, static_cast<qint64>(size)));
 }
 
 /** Releases the cache handle without deleting or mutating remote content. */
 int fsRelease(const char *, struct fuse_file_info *info)
 {
-    delete reinterpret_cast<QFile *>(info->fh);
+    delete reinterpret_cast<OpenFile *>(info->fh);
     info->fh = 0;
     return 0;
 }
@@ -323,7 +393,8 @@ int main(int argc, char **argv)
                          QDBusInterface(QString::fromLatin1(serviceName),
                                         QString::fromLatin1(objectPath),
                                         QString::fromLatin1(interfaceName),
-                                        QDBusConnection::sessionBus())};
+                                        QDBusConnection::sessionBus()),
+                         {}, 0, false};
     if (!fs.service.isValid()) {
         return 1;
     }

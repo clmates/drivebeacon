@@ -169,6 +169,14 @@ void DriveBeaconService::materializeFile(const QString &profileName,
     }
 }
 
+void DriveBeaconService::keepLocalPath(const QString &profileName,
+                                       const QString &relativePath)
+{
+    if (auto *controller = m_controllers.value(profileName.trimmed(), nullptr)) {
+        controller->setGraphPathPolicy(relativePath, QStringLiteral("keep-local"));
+    }
+}
+
 void DriveBeaconService::evictPath(const QString &profileName,
                                    const QString &relativePath)
 {
@@ -181,16 +189,38 @@ void DriveBeaconService::mountProfile(const QString &profileName)
 {
     const QString name = profileName.trimmed();
     if (name.isEmpty() || m_fuseProcesses.contains(name)) {
+        qWarning().noquote() << "DriveBeacon FUSE mount skipped for" << name
+                             << "because the profile is empty or already mounted";
         return;
     }
     auto *controller = m_controllers.value(name, nullptr);
     if (!controller || !controller->graphAuthenticated()) {
+        qWarning().noquote() << "DriveBeacon FUSE mount rejected for" << name
+                             << "because the Graph profile is not loaded or authenticated";
         return;
     }
     const QVariantMap status = profileStatus(name);
     const QString mountPoint = status.value(QStringLiteral("mountPoint")).toString();
     const QString backingDirectory = status.value(QStringLiteral("cacheDirectory")).toString();
-    if (mountPoint.isEmpty() || backingDirectory.isEmpty() || !QDir().mkpath(mountPoint)) {
+    if (mountPoint.isEmpty() || backingDirectory.isEmpty()) {
+        qWarning().noquote() << "DriveBeacon FUSE mount rejected for" << name
+                             << "because mount/cache paths are invalid"
+                             << mountPoint << backingDirectory;
+        return;
+    }
+    if (!QDir().mkpath(mountPoint)) {
+        // A previous helper can leave a disconnected FUSE endpoint after a
+        // crash or forced termination. Remove only that profile's stale
+        // mount, then retry the directory creation before giving up.
+        const QString fusermount = QStandardPaths::findExecutable(QStringLiteral("fusermount3"));
+        if (!fusermount.isEmpty()) {
+            QProcess::execute(fusermount, {QStringLiteral("-u"), mountPoint});
+        }
+    }
+    if (!QDir().mkpath(mountPoint)) {
+        qWarning().noquote() << "DriveBeacon FUSE mount rejected for" << name
+                             << "because mount/cache paths are invalid"
+                             << mountPoint << backingDirectory;
         return;
     }
     QString helper = QDir(QCoreApplication::applicationDirPath()).filePath(
@@ -199,6 +229,8 @@ void DriveBeaconService::mountProfile(const QString &profileName)
         helper = QStandardPaths::findExecutable(QStringLiteral("drivebeacon-fs"));
     }
     if (helper.isEmpty()) {
+        qWarning().noquote() << "DriveBeacon FUSE mount rejected for" << name
+                             << "because drivebeacon-fs was not found";
         return;
     }
     auto *process = new QProcess(this);

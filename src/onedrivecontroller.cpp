@@ -114,6 +114,11 @@ OneDriveController::OneDriveController(const QString &profileName,
     connect(&m_graphAuth, &DeviceLoginAuth::errorOccurred, this,
             [this](const QString &message) {
                 m_graphErrorMessage = message;
+                // Do not keep polling Graph with the rejected bearer token.
+                // The persisted sync flag remains enabled so a successful
+                // manual reconnect can resume the profile automatically.
+                m_graphTokens = {};
+                m_graphClient.stopMonitoring();
                 m_graphAuthorizationUrl.clear();
                 setJournalError(message);
                 m_graphVerificationUri.clear();
@@ -250,6 +255,11 @@ OneDriveController::OneDriveController(const QString &profileName,
     connect(&m_graphClient, &GraphClient::placeholderStateChanged, this,
             [this](const QStringList &paths) {
         m_profile.graphPlaceholderPaths = paths;
+        m_profileStore.save(m_profile);
+    });
+    connect(&m_graphClient, &GraphClient::pathPoliciesChanged, this,
+            [this](const QStringList &policies) {
+        m_profile.graphPathPolicies = policies;
         m_profileStore.save(m_profile);
     });
     connect(&m_graphClient, &GraphClient::logMessage, this,
@@ -479,8 +489,23 @@ QStringList OneDriveController::graphRemoteFolders() const
 
 void OneDriveController::setGraphPathPolicies(const QStringList &policies)
 {
-    m_profile.graphPathPolicies = policies;
     m_graphClient.setPathPolicies(policies);
+    m_profile.graphPathPolicies = m_graphClient.pathPolicies();
+    m_profileStore.save(m_profile);
+}
+
+void OneDriveController::setGraphPathPolicy(const QString &relativePath,
+                                            const QString &availability)
+{
+    const LocalAvailability policy = localAvailabilityFromName(availability.trimmed().toLower());
+    if (policy == LocalAvailability::RemoteOnly) {
+        setJournalError(QStringLiteral("Remote-only is represented by Release Local cache."));
+        return;
+    }
+    m_graphClient.setPathPolicy(relativePath, policy);
+    if (policy == LocalAvailability::KeepLocal) {
+        m_graphClient.materializePath(relativePath);
+    }
 }
 
 QVariantList OneDriveController::graphRemoteEntries() const
@@ -675,7 +700,7 @@ void OneDriveController::materializeGraphFile(const QString &relativePath)
         || !m_graphSyncEnabled) {
         return;
     }
-    m_graphClient.materializeFile(relativePath);
+    m_graphClient.materializePath(relativePath);
 }
 
 void OneDriveController::evictGraphPath(const QString &relativePath)

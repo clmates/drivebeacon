@@ -99,24 +99,12 @@ int callServiceMethod(const QString &method, const QVariantList &arguments = {})
     return 0;
 }
 
-/** Rejects cache eviction locally when the selected profile keeps all files. */
+/** Releases one path without ever issuing a remote deletion. */
 int evictPath(const QString &profile, const QString &relativePath)
 {
     QDBusInterface service = serviceInterface();
     if (!service.isValid()) {
         return printError(service.lastError().message());
-    }
-    const QDBusMessage statusReply = service.call(QStringLiteral("profileStatus"), profile);
-    if (statusReply.type() == QDBusMessage::ErrorMessage || statusReply.arguments().isEmpty()) {
-        return printError(statusReply.errorMessage().isEmpty()
-                              ? QStringLiteral("Could not read profile status.")
-                              : statusReply.errorMessage());
-    }
-    const QVariantMap status = qdbus_cast<QVariantMap>(statusReply.arguments().constFirst());
-    const QString availability = status.value(QStringLiteral("availability")).toString();
-    if (availability == QLatin1String("keep-local")) {
-        return printError(QStringLiteral(
-            "Profile '%1' uses keep-local; set on-demand or remote-only first.").arg(profile));
     }
     return callServiceMethod(QStringLiteral("evictPath"), {profile, relativePath});
 }
@@ -180,6 +168,7 @@ int main(int argc, char *argv[])
                        "<start|stop|restart>; set-availability <name> "
                        "<keep-local|remote-only|on-demand>; mount <name>; "
                        "unmount <name>; materialize <name> <relative-path>; "
+                       "keep-local <name> <relative-path>; "
                        "evict <name> <relative-path>"));
     parser.process(application);
 
@@ -224,6 +213,10 @@ int main(int argc, char *argv[])
     }
     if (command == QStringLiteral("materialize") && arguments.size() == 3) {
         return callServiceMethod(QStringLiteral("materializeFile"),
+                                 {arguments.at(1), arguments.at(2)});
+    }
+    if (command == QStringLiteral("keep-local") && arguments.size() == 3) {
+        return callServiceMethod(QStringLiteral("keepLocalPath"),
                                  {arguments.at(1), arguments.at(2)});
     }
     if (command == QStringLiteral("evict") && arguments.size() == 3) {

@@ -73,6 +73,8 @@ public Q_SLOTS:
     Q_INVOKABLE QVariantList remoteEntries(const QString &profileName) const;
     /** Requests content for one remote-only/on-demand path. */
     void materializeFile(const QString &profileName, const QString &relativePath);
+    /** Marks one file/folder KeepLocal and materializes folder descendants. */
+    void keepLocalPath(const QString &profileName, const QString &relativePath);
     /** Releases one cached file or folder without changing remote content. */
     void evictPath(const QString &profileName, const QString &relativePath);
     /** Mounts one profile's read-only FUSE view at its configured user path. */

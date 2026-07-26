@@ -58,6 +58,14 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     setWindowTitle(i18n("DriveBeacon profiles"));
     resize(720, 430);
 
+    // Authentication failures often need to be copied into a bug report or
+    // journal investigation. QLabel is otherwise not selectable, so expose
+    // the status text without adding a second, transient error dialog.
+    m_graphStatusLabel->setWordWrap(true);
+    m_graphStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse
+                                                 | Qt::TextSelectableByKeyboard);
+    m_graphStatusLabel->setToolTip(i18n("Select this message and copy it for diagnostics."));
+
     m_backendCombo->addItem(i18n("abraunegg journal"), QStringLiteral("abraunegg-journal"));
     m_backendCombo->addItem(i18n("Microsoft Graph"), QStringLiteral("graph"));
     // The profile default is intentionally on-demand. Materialization policy

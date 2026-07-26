@@ -17,6 +17,7 @@
 #include <QSaveFile>
 #include <QScopeGuard>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QSet>
 #include <systemd/sd-journal.h>
 
@@ -27,6 +28,20 @@ namespace {
 constexpr qint64 largeUploadThreshold = 10 * 1024 * 1024;
 /** 10 MiB is aligned to Graph's required 320 KiB upload range multiple. */
 constexpr qint64 uploadChunkSize = 10 * 1024 * 1024;
+
+/** Serializes path policies locally so GraphClient tests remain self-contained. */
+QString graphAvailabilityName(LocalAvailability availability)
+{
+    switch (availability) {
+    case LocalAvailability::KeepLocal:
+        return QStringLiteral("keep-local");
+    case LocalAvailability::RemoteOnly:
+        return QStringLiteral("remote-only");
+    case LocalAvailability::OnDemand:
+        return QStringLiteral("on-demand");
+    }
+    return QStringLiteral("on-demand");
+}
 
 /** Adds a UTC timestamp and publishes the same message to stderr/journald. */
 void graphLog(const QString &message)
@@ -155,8 +170,19 @@ GraphClient::GraphClient(QObject *parent)
             // The first delta page must carry parentReference and size so
             // nested files can be routed and scheduled correctly after a
             // restart; subsequent opaque links must remain untouched.
-            url.setQuery(url.query(QUrl::FullyEncoded)
-                         + QStringLiteral("&$select=id,name,file,deleted,parentReference,eTag,size"));
+            QUrlQuery query(url);
+            query.addQueryItem(QStringLiteral("$select"),
+                               QStringLiteral("id,name,folder,file,deleted,parentReference,eTag,size"));
+            url.setQuery(query);
+        } else {
+            // Older persisted cursors selected only `file`. Preserve the
+            // opaque delta token but request the folder facet as well, so an
+            // empty directory cannot be mistaken for a zero-byte file.
+            QUrlQuery query(url);
+            query.removeAllQueryItems(QStringLiteral("$select"));
+            query.addQueryItem(QStringLiteral("$select"),
+                               QStringLiteral("id,name,folder,file,deleted,parentReference,eTag,size"));
+            url.setQuery(query);
         }
         auto *reply = m_network.get(graphRequest(url, m_deltaToken.toUtf8()));
         connect(reply, &QNetworkReply::finished, this, [this, reply] {
@@ -244,6 +270,14 @@ GraphClient::GraphClient(QObject *parent)
                 if (!item.contains(QStringLiteral("file"))) {
                     // Delta commonly includes a parent folder when a child
                     // changes; that is metadata context, not a folder change.
+                    if (item.contains(QStringLiteral("folder")) && !oldPath.isEmpty()) {
+                        // The persisted baseline does not store item facets.
+                        // Recover the known folder identity before continuing
+                        // so this path cannot enter the file queue.
+                        m_remoteFolders.insert(oldPath);
+                        m_remoteFolderIds.insert(oldPath, itemId);
+                        m_remoteEtags.insert(itemId, item.value(QStringLiteral("eTag")).toString());
+                    }
                     continue;
                 }
                 const QString parentId = item.value(QStringLiteral("parentReference")).toObject()
@@ -368,7 +402,8 @@ GraphClient::GraphClient(QObject *parent)
                 m_remotePathsById.insert(itemId, relativePath);
                 m_remoteItemIds.insert(relativePath, itemId);
                 m_remoteEtags.insert(itemId, eTag);
-                if (m_materializeFiles && isIncluded(relativePath)) {
+                if (m_materializeFiles && isIncluded(relativePath)
+                    && !isRemoteFolderPath(relativePath)) {
                     m_pendingFiles.enqueue({itemId, relativePath,
                                             item.value(QStringLiteral("size")).toVariant().toLongLong()});
                 }
@@ -505,6 +540,39 @@ void GraphClient::setPathPolicies(const QStringList &policies)
                 : LocalAvailability::OnDemand;
         m_pathPolicies.insert(path, availability);
     }
+}
+
+QStringList GraphClient::pathPolicies() const
+{
+    QStringList result;
+    for (auto it = m_pathPolicies.cbegin(); it != m_pathPolicies.cend(); ++it) {
+        result.append(it.key() + QLatin1Char('\t') + graphAvailabilityName(it.value()));
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+void GraphClient::setPathPolicy(const QString &relativePath, LocalAvailability availability)
+{
+    const QString normalized = QDir::cleanPath(relativePath).trimmed();
+    if (normalized.isEmpty() || normalized == QLatin1String(".")) {
+        Q_EMIT errorOccurred(QStringLiteral("A relative file or folder path is required."));
+        return;
+    }
+    const QString prefix = normalized + QLatin1Char('/');
+    if (availability != LocalAvailability::KeepLocal) {
+        // A released folder must not retain protected descendants that could
+        // silently re-materialize during a later local scan.
+        for (auto it = m_pathPolicies.begin(); it != m_pathPolicies.end();) {
+            if (it.key() == normalized || it.key().startsWith(prefix)) {
+                it = m_pathPolicies.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    m_pathPolicies.insert(normalized, availability);
+    Q_EMIT pathPoliciesChanged(pathPolicies());
 }
 
 LocalAvailability GraphClient::availabilityForPath(const QString &relativePath) const
@@ -766,6 +834,73 @@ void GraphClient::materializeFile(const QString &relativePath)
         Q_EMIT errorOccurred(QStringLiteral("Remote file is not indexed: %1").arg(normalized));
         return;
     }
+    // Graph exposes file content through /content only.  Reject directories
+    // here as a second line of defence for CLI, D-Bus, and FUSE callers.
+    if (m_remoteFolders.contains(normalized)) {
+        Q_EMIT errorOccurred(QStringLiteral("Remote path is a folder, not a file: %1")
+                                 .arg(normalized));
+        return;
+    }
+    // The persisted baseline predates folder facets and may describe an empty
+    // directory as a zero-byte item. Confirm that ambiguous case with Graph
+    // before allowing FUSE or the CLI to enqueue a /content request.
+    if (m_remoteSizes.value(normalized, -1) <= 0) {
+        const QUrl url(QStringLiteral("https://graph.microsoft.com/v1.0/drives/%1/items/%2?$select=id,folder,file,size")
+                           .arg(QString::fromUtf8(QUrl::toPercentEncoding(m_syncDriveId)),
+                                QString::fromUtf8(QUrl::toPercentEncoding(itemId))));
+        auto *reply = m_network.get(graphRequest(url, m_syncToken.toUtf8()));
+        connect(reply, &QNetworkReply::finished, this, [this, reply, normalized, itemId] {
+            const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
+            if (reply->error() != QNetworkReply::NoError) {
+                Q_EMIT errorOccurred(graphError(reply,
+                                                 QStringLiteral("Could not inspect remote item.")));
+                return;
+            }
+            QJsonParseError parseError;
+            const QJsonDocument document = QJsonDocument::fromJson(reply->readAll(), &parseError);
+            if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+                Q_EMIT errorOccurred(QStringLiteral("Graph returned invalid item metadata."));
+                return;
+            }
+            const QJsonObject item = document.object();
+            if (item.contains(QStringLiteral("folder"))) {
+                m_remoteFolders.insert(normalized);
+                m_remoteFolderIds.insert(normalized, itemId);
+                Q_EMIT errorOccurred(QStringLiteral("Remote path is a folder, not a file: %1")
+                                         .arg(normalized));
+                return;
+            }
+            queueMaterialization(normalized, itemId);
+        });
+        return;
+    }
+    queueMaterialization(normalized, itemId);
+}
+
+void GraphClient::materializePath(const QString &relativePath)
+{
+    const QString normalized = QDir::cleanPath(relativePath).trimmed();
+    const QString prefix = normalized + QLatin1Char('/');
+    if (m_remoteFolders.contains(normalized)) {
+        QStringList paths;
+        for (auto it = m_remoteItemIds.cbegin(); it != m_remoteItemIds.cend(); ++it) {
+            if (it.key().startsWith(prefix) && !m_remoteFolders.contains(it.key())) {
+                paths.append(it.key());
+            }
+        }
+        std::sort(paths.begin(), paths.end());
+        for (const QString &path : paths) {
+            queueMaterialization(path, m_remoteItemIds.value(path));
+        }
+        log(QStringLiteral("Graph sync: Keep Local queued %1 file(s) below %2")
+                .arg(paths.size()).arg(normalized));
+        return;
+    }
+    materializeFile(normalized);
+}
+
+void GraphClient::queueMaterialization(const QString &normalized, const QString &itemId)
+{
     const QString localPath = safeLocalPath(normalized);
     if (localPath.isEmpty()) {
         Q_EMIT errorOccurred(QStringLiteral("Unsafe remote path rejected: %1").arg(normalized));
@@ -797,11 +932,8 @@ void GraphClient::evictPath(const QString &relativePath)
         Q_EMIT errorOccurred(QStringLiteral("A relative file or folder path is required."));
         return;
     }
-    if (m_materializeFiles) {
-        Q_EMIT errorOccurred(QStringLiteral(
-            "Evicting cached content requires the on-demand or remote-only policy."));
-        return;
-    }
+    // A selected path receives an OnDemand override, so Release Local cache
+    // also works for profiles created with the older KeepLocal default.
     const QString localRoot = safeLocalPath(normalized);
     if (localRoot.isEmpty()) {
         Q_EMIT errorOccurred(QStringLiteral("Unsafe local path rejected: %1").arg(normalized));
@@ -853,6 +985,7 @@ void GraphClient::evictPath(const QString &relativePath)
         m_localMetadata.remove(path);
         log(QStringLiteral("Graph sync: evicted local %1 (On demand)").arg(path));
     }
+    setPathPolicy(normalized, LocalAvailability::OnDemand);
     Q_EMIT placeholderStateChanged(placeholderPaths());
     Q_EMIT localStateChanged(localSignatures(), remotePaths());
 }
@@ -1144,7 +1277,7 @@ void GraphClient::processNextFolder()
                 m_remoteEtags.insert(itemId, eTag);
                 m_remoteItemIds.insert(relativePath, itemId);
                 m_remoteSizes.insert(relativePath, remoteSize);
-                if (!alreadyCurrent) {
+                if (!alreadyCurrent && !isRemoteFolderPath(relativePath)) {
                     m_pendingFiles.enqueue({itemId, relativePath,
                                             item.value(QStringLiteral("size")).toVariant().toLongLong()});
                 }
@@ -1220,7 +1353,7 @@ void GraphClient::processNextFolder()
                         m_remoteEtags.insert(itemId, eTag);
                         m_remoteItemIds.insert(relativePath, itemId);
                         m_remoteSizes.insert(relativePath, remoteSize);
-                        if (!alreadyCurrent) {
+                        if (!alreadyCurrent && !isRemoteFolderPath(relativePath)) {
                             m_pendingFiles.enqueue({itemId, relativePath,
                                                     item.value(QStringLiteral("size"))
                                                         .toVariant().toLongLong()});
@@ -1245,6 +1378,14 @@ void GraphClient::processNextFile()
     QQueue<GraphSyncFile> deferredFiles;
     while (!m_pendingFiles.isEmpty()) {
         const GraphSyncFile file = m_pendingFiles.dequeue();
+        if (isRemoteFolderPath(file.relativePath)) {
+            // A stale baseline or an unusual delta representation can leave a
+            // folder in the legacy queue. Never turn that metadata entry into
+            // a Graph /content request; discard it and continue the batch.
+            log(QStringLiteral("Graph sync: skipping folder in download queue %1")
+                    .arg(file.relativePath));
+            continue;
+        }
         if (m_requestedMaterializations.contains(file.relativePath)
             || shouldMaterializePath(file.relativePath)) {
             deferredFiles.enqueue(file);
@@ -1314,6 +1455,11 @@ void GraphClient::startPendingDownloads()
         // dequeue/move made this boundary unnecessarily hard to audit and
         // could lose the tail item when transfers were started concurrently.
         const GraphSyncFile file = m_pendingFiles.takeAt(selectedIndex);
+        if (isRemoteFolderPath(file.relativePath)) {
+            log(QStringLiteral("Graph sync: skipping folder download %1")
+                    .arg(file.relativePath));
+            continue;
+        }
         if (m_activeDownloads.contains(file.relativePath)) {
             log(QStringLiteral("Graph sync: skipping already active download %1")
                     .arg(file.relativePath));
@@ -1987,6 +2133,15 @@ bool GraphClient::shouldTraverse(const QString &relativePath) const
             || normalized.startsWith(relativePath + QLatin1Char('/'))
             || relativePath.startsWith(normalized + QLatin1Char('/'));
     });
+}
+
+bool GraphClient::isRemoteFolderPath(const QString &relativePath) const
+{
+    if (m_remoteFolders.contains(relativePath) || m_remoteFolderIds.contains(relativePath)) {
+        return true;
+    }
+    const QString localPath = safeLocalPath(relativePath);
+    return !localPath.isEmpty() && QFileInfo(localPath).isDir();
 }
 
 QString GraphClient::safeLocalPath(const QString &relativePath) const

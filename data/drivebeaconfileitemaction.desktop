@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Service
+Name=DriveBeacon
+X-KDE-Library=drivebeacon_fileitemaction
+X-KDE-ServiceTypes=KFileItemAction/Plugin
+X-KDE-Show-In-Submenu=false
+MimeType=inode/directory;text/plain;text/csv;text/html;application/octet-stream;application/pdf;application/zip;application/x-7z-compressed;application/x-rar;application/msword;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.ms-excel;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.ms-powerpoint;application/vnd.openxmlformats-officedocument.presentationml.presentation;image/jpeg;image/png;image/gif;image/webp;audio/mpeg;audio/ogg;audio/wav;video/mpeg;video/mp4;video/quicktime;video/x-msvideo;video/x-matroska;

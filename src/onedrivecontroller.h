@@ -113,6 +113,8 @@ public:
     [[nodiscard]] QVariantList graphRemoteEntries() const;
     /** Applies persisted per-path availability rules without resetting Graph state. */
     void setGraphPathPolicies(const QStringList &policies);
+    /** Applies KeepLocal or OnDemand to one file/folder and persists it. */
+    void setGraphPathPolicy(const QString &relativePath, const QString &availability);
 
     /** Starts the user's OneDrive systemd service. */
     Q_INVOKABLE void startService();
@@ -140,7 +142,7 @@ public:
     Q_INVOKABLE void setGraphSyncEnabled(bool enabled);
     /** Changes local materialization policy without discarding sync baselines. */
     Q_INVOKABLE void setAvailability(const QString &availability);
-    /** Queues a remote file for materialization without changing its policy. */
+    /** Materializes one file or all files below a selected folder. */
     Q_INVOKABLE void materializeGraphFile(const QString &relativePath);
     /** Releases one cached file or folder without changing remote content. */
     Q_INVOKABLE void evictGraphPath(const QString &relativePath);

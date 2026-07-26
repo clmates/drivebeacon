@@ -97,6 +97,37 @@ target_link_libraries(drivebeacon-service PRIVATE
     systemd
 )
 
+# Dolphin loads this action provider from KIO's file-item-action namespace.
+# The provider delegates all state changes to drivebeaconctl, so credentials and
+# synchronization policy remain owned by the headless DriveBeacon service.
+kcoreaddons_add_plugin(drivebeacon_fileitemaction
+    SOURCES drivebeaconfileitemaction.cpp drivebeaconfileitemaction.json
+    INSTALL_NAMESPACE "kf6/kfileitemaction"
+)
+target_compile_definitions(drivebeacon_fileitemaction PRIVATE
+    DRIVEBEACON_CTL_PATH="${CMAKE_INSTALL_FULL_BINDIR}/drivebeaconctl"
+)
+target_link_libraries(drivebeacon_fileitemaction PRIVATE
+    Qt6::Core
+    KF6::CoreAddons
+    KF6::I18n
+    KF6::KIOWidgets
+)
+
+# Dolphin asks overlay providers for lightweight visual state without opening
+# the selected file. This provider reads the persisted cache index only.
+kcoreaddons_add_plugin(drivebeacon_overlayicon
+    SOURCES drivebeaconoverlayicon.cpp
+    INSTALL_NAMESPACE "kf6/overlayicon"
+)
+target_link_libraries(drivebeacon_overlayicon PRIVATE
+    Qt6::Core
+    KF6::KIOCore
+)
+install(FILES ../data/drivebeaconfileitemaction.desktop
+    DESTINATION ${KDE_INSTALL_DATADIR}/kservices6
+)
+
 add_executable(drivebeaconctl drivebeaconctl.cpp)
 target_compile_features(drivebeaconctl PRIVATE cxx_std_20)
 target_compile_definitions(drivebeaconctl PRIVATE DRIVEBEACON_VERSION="${PROJECT_VERSION}")

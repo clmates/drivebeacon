@@ -185,6 +185,8 @@ void DeviceLoginAuth::processTokenReply(QNetworkReply *reply)
         Q_EMIT errorOccurred(QStringLiteral("Microsoft returned no access token."));
         return;
     }
+    // Access tokens are opaque credentials. They may be JWTs, but the client
+    // must not inspect their structure; the resource server owns validation.
     cancel();
     Q_EMIT authenticated(tokens);
 }

@@ -74,6 +74,15 @@ known baseline remain untouched. `Download on demand` materializes a file when
 an application reads it through the FUSE view. Folder policies inherit from
 their nearest configured parent and can keep selected folders local.
 
+When browsing a mounted profile in Dolphin, the DriveBeacon file-item plugin
+adds `Keep Local` and `Release Local cache` actions for files and folders. The
+first protects a file from future automatic purging, and recursively
+materializes a selected folder; the second removes the local cache while
+leaving the remote item untouched. The actions are delegated to
+`drivebeaconctl`, so they use the same service and profile state as the tray
+and command line. A separate overlay plugin shows whether an item is cached
+or represented by a remote-only placeholder.
+
 ## FAQ: unexpected downloads from the FUSE view
 
 ### Why did opening a folder download many files?
