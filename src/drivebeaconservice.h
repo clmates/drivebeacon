@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QHash>
 #include <QVariantMap>
+#include <QProcess>
 
 /**
  * Headless D-Bus facade for the synchronization controller.
@@ -35,6 +36,8 @@ class DriveBeaconService final : public QObject
 public:
     /** Creates the service facade and starts enabled Graph profiles. */
     explicit DriveBeaconService(const QString &profileName, QObject *parent = nullptr);
+    /** Unmounts profile FUSE views owned by the service before shutdown. */
+    ~DriveBeaconService() override;
 
     [[nodiscard]] QString profileName() const;
     [[nodiscard]] QString backendName() const;
@@ -66,6 +69,16 @@ public Q_SLOTS:
     void setPrimaryProfile(const QString &profileName);
     /** Returns status fields for one loaded profile for CLI and tray clients. */
     Q_INVOKABLE QVariantMap profileStatus(const QString &profileName) const;
+    /** Returns remote path metadata cached by one Graph controller. */
+    Q_INVOKABLE QVariantList remoteEntries(const QString &profileName) const;
+    /** Requests content for one remote-only/on-demand path. */
+    void materializeFile(const QString &profileName, const QString &relativePath);
+    /** Releases one cached file or folder without changing remote content. */
+    void evictPath(const QString &profileName, const QString &relativePath);
+    /** Mounts one profile's read-only FUSE view at its configured user path. */
+    void mountProfile(const QString &profileName);
+    /** Unmounts one profile without changing synchronization or remote state. */
+    void unmountProfile(const QString &profileName);
     /** Controls the legacy onedrive.service through the existing manager. */
     void startLegacyService();
     void stopLegacyService();
@@ -88,4 +101,6 @@ private:
     QString m_activeProfileName;
     /** Optional command-line profile override retained across reloads. */
     QString m_requestedProfileName;
+    /** One foreground FUSE helper is owned by the service for each mounted profile. */
+    QHash<QString, QProcess *> m_fuseProcesses;
 };

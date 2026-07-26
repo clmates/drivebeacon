@@ -51,6 +51,11 @@ SyncProfile ProfileStore::load(const QString &requestedName) const
     profile.localDirectory = settings.value(
         QStringLiteral("localDirectory"), QDir::home().filePath(QStringLiteral("OneDrive")))
                                  .toString();
+    // The mount path is independent from the private cache. Fall back to the
+    // historical directory only for profiles created before FUSE mounts were
+    // configurable, so an upgrade never silently changes the visible path.
+    profile.mountDirectory = settings.value(
+        QStringLiteral("mountDirectory"), profile.localDirectory).toString();
     profile.availability = localAvailabilityFromName(
         settings.value(QStringLiteral("availability"), localAvailabilityName(profile.availability))
             .toString());
@@ -74,12 +79,21 @@ SyncProfile ProfileStore::load(const QString &requestedName) const
     profile.graphRemotePaths = settings.value(QStringLiteral("graphRemotePaths")).toStringList();
     profile.graphPlaceholderPaths = settings.value(QStringLiteral("graphPlaceholderPaths"))
                                        .toStringList();
+    profile.graphPathPolicies = settings.value(QStringLiteral("graphPathPolicies"))
+                                    .toStringList();
     profile.includedFolders = settings.value(QStringLiteral("includedFolders")).toStringList();
     profile.excludedFolders = settings.value(QStringLiteral("excludedFolders")).toStringList();
     profile.graphSyncedIncludedFolders = settings.value(
         QStringLiteral("graphSyncedIncludedFolders")).toStringList();
     profile.graphSyncedExcludedFolders = settings.value(
         QStringLiteral("graphSyncedExcludedFolders")).toStringList();
+    // Older dialog versions could append the same folder on every save. Keep
+    // the in-memory policy canonical so duplicate entries cannot trigger
+    // unnecessary folder refreshes or obscure the user's actual selection.
+    profile.includedFolders.removeDuplicates();
+    profile.excludedFolders.removeDuplicates();
+    profile.graphSyncedIncludedFolders.removeDuplicates();
+    profile.graphSyncedExcludedFolders.removeDuplicates();
     return profile;
 }
 
@@ -94,6 +108,7 @@ void ProfileStore::save(const SyncProfile &profile)
     settings.setValue(QStringLiteral("graphClientId"), profile.graphClientId);
     settings.setValue(QStringLiteral("remoteDriveId"), profile.remoteDriveId);
     settings.setValue(QStringLiteral("localDirectory"), profile.localDirectory);
+    settings.setValue(QStringLiteral("mountDirectory"), profile.mountDirectory);
     settings.setValue(QStringLiteral("availability"), localAvailabilityName(profile.availability));
     settings.setValue(QStringLiteral("syncEnabled"), profile.syncEnabled);
     settings.setValue(QStringLiteral("remoteCheckIntervalSeconds"),
@@ -106,6 +121,7 @@ void ProfileStore::save(const SyncProfile &profile)
     settings.setValue(QStringLiteral("graphLocalSignatures"), profile.graphLocalSignatures);
     settings.setValue(QStringLiteral("graphRemotePaths"), profile.graphRemotePaths);
     settings.setValue(QStringLiteral("graphPlaceholderPaths"), profile.graphPlaceholderPaths);
+    settings.setValue(QStringLiteral("graphPathPolicies"), profile.graphPathPolicies);
     settings.setValue(QStringLiteral("includedFolders"), profile.includedFolders);
     settings.setValue(QStringLiteral("excludedFolders"), profile.excludedFolders);
     settings.setValue(QStringLiteral("graphSyncedIncludedFolders"),

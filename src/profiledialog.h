@@ -65,6 +65,7 @@ private:
     QListWidget *m_profileList;
     QLineEdit *m_nameEdit;
     QComboBox *m_backendCombo;
+    /** User-visible FUSE path; the service keeps content in its private cache. */
     QLineEdit *m_directoryEdit;
     QComboBox *m_availabilityCombo;
     QCheckBox *m_syncEnabledCheck;

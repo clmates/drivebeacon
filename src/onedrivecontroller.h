@@ -13,6 +13,7 @@
 
 #include <QObject>
 #include <QProcess>
+#include <QVariantList>
 
 /** QML-facing coordinator for service control, configuration, and activity history. */
 class OneDriveController final : public QObject
@@ -66,7 +67,7 @@ public:
     [[nodiscard]] QString statusText() const;
     /** Returns the journal error in preference to a service-control error. */
     [[nodiscard]] QString errorMessage() const;
-    /** Returns the configured local OneDrive directory. */
+    /** Returns the effective service/cache directory used by this controller. */
     [[nodiscard]] QString syncDirectory() const;
     /** Returns the configured backend identifier. */
     [[nodiscard]] QString backendName() const;
@@ -108,6 +109,10 @@ public:
     [[nodiscard]] bool graphSyncEnabled() const;
     /** Returns the first-level folders discovered in the signed-in drive. */
     [[nodiscard]] QStringList graphRemoteFolders() const;
+    /** Returns the current remote tree for the optional FUSE provider. */
+    [[nodiscard]] QVariantList graphRemoteEntries() const;
+    /** Applies persisted per-path availability rules without resetting Graph state. */
+    void setGraphPathPolicies(const QStringList &policies);
 
     /** Starts the user's OneDrive systemd service. */
     Q_INVOKABLE void startService();
@@ -135,6 +140,10 @@ public:
     Q_INVOKABLE void setGraphSyncEnabled(bool enabled);
     /** Changes local materialization policy without discarding sync baselines. */
     Q_INVOKABLE void setAvailability(const QString &availability);
+    /** Queues a remote file for materialization without changing its policy. */
+    Q_INVOKABLE void materializeGraphFile(const QString &relativePath);
+    /** Releases one cached file or folder without changing remote content. */
+    Q_INVOKABLE void evictGraphPath(const QString &relativePath);
     /** Applies the global pause without changing this profile's own setting. */
     void setGlobalGraphSyncEnabled(bool enabled);
     /** Confirms migration of the discovered abraunegg configuration. */

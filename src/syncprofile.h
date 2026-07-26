@@ -30,8 +30,10 @@ struct SyncProfile {
     QString graphClientId;
     /** Stable Graph drive ID selected for synchronization. */
     QString remoteDriveId;
-    /** Absolute local synchronization root. */
+    /** Legacy visible root retained for older clients; service sync uses cache. */
     QString localDirectory;
+    /** User-visible FUSE mount path; content is stored separately in the cache. */
+    QString mountDirectory;
     /** Whether Graph content is materialized locally. */
     LocalAvailability availability = LocalAvailability::KeepLocal;
     /** Whether this profile is allowed to perform Graph synchronization work. */
@@ -52,6 +54,8 @@ struct SyncProfile {
     QStringList graphRemotePaths;
     /** Relative paths represented locally by zero-byte RemoteOnly placeholders. */
     QStringList graphPlaceholderPaths;
+    /** Persisted `relativePath<TAB>availability` overrides inherited by descendants. */
+    QStringList graphPathPolicies;
     /** First-level remote folders explicitly selected for synchronization. */
     QStringList includedFolders;
     /** First-level remote folders explicitly excluded from synchronization. */

@@ -153,6 +153,12 @@ void DriveBeaconServiceClient::setProfileAvailability(const QString &profileName
     call(QStringLiteral("setProfileAvailability"), {profileName, availability});
 }
 
+void DriveBeaconServiceClient::evictPath(const QString &profileName,
+                                         const QString &relativePath)
+{
+    call(QStringLiteral("evictPath"), {profileName, relativePath});
+}
+
 void DriveBeaconServiceClient::setGlobalSyncEnabled(bool enabled)
 {
     call(QStringLiteral("setGlobalSyncEnabled"), {enabled});
@@ -166,6 +172,16 @@ void DriveBeaconServiceClient::reloadProfiles()
 void DriveBeaconServiceClient::setPrimaryProfile(const QString &profileName)
 {
     call(QStringLiteral("setPrimaryProfile"), {profileName});
+}
+
+void DriveBeaconServiceClient::mountProfile(const QString &profileName)
+{
+    call(QStringLiteral("mountProfile"), {profileName});
+}
+
+void DriveBeaconServiceClient::unmountProfile(const QString &profileName)
+{
+    call(QStringLiteral("unmountProfile"), {profileName});
 }
 
 void DriveBeaconServiceClient::onRemoteStatusChanged()

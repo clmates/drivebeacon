@@ -60,10 +60,12 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
 
     m_backendCombo->addItem(i18n("abraunegg journal"), QStringLiteral("abraunegg-journal"));
     m_backendCombo->addItem(i18n("Microsoft Graph"), QStringLiteral("graph"));
-    m_availabilityCombo->addItem(i18n("Keep local copy"), QStringLiteral("keep-local"));
-    m_availabilityCombo->addItem(i18n("Remote only"), QStringLiteral("remote-only"));
+    // The profile default is intentionally on-demand. Materialization policy
+    // belongs to a folder or file so a global switch cannot evict an account
+    // unexpectedly; legacy values are still read but normalized on save.
     m_availabilityCombo->addItem(i18n("Download on demand"), QStringLiteral("on-demand"));
-    m_folderTree->setHeaderLabels({i18n("Remote folder"), i18n("Sync"), i18n("Exclude")});
+    m_folderTree->setHeaderLabels({i18n("Remote folder"), i18n("Sync"), i18n("Exclude"),
+                                   i18n("Folder policy")});
     m_folderTree->setRootIsDecorated(false);
     m_folderTree->setAlternatingRowColors(true);
     m_folderTree->setMinimumHeight(150);
@@ -123,8 +125,8 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     auto *form = new QFormLayout;
     form->addRow(i18n("Profile name:"), m_nameEdit);
     form->addRow(i18n("Backend:"), m_backendCombo);
-    form->addRow(i18n("Local directory:"), directoryRow);
-    form->addRow(i18n("Availability:"), m_availabilityCombo);
+    form->addRow(i18n("FUSE mount directory:"), directoryRow);
+    form->addRow(i18n("Default availability:"), m_availabilityCombo);
     form->addRow(i18n("Account state:"), m_syncEnabledCheck);
     form->addRow(i18n("Global state:"), m_globalSyncEnabledCheck);
     form->addRow(i18n("Remote check interval:"), m_remoteIntervalSpin);
@@ -149,8 +151,8 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     connect(saveButton, &QPushButton::clicked, this, &ProfileDialog::saveProfile);
     connect(useButton, &QPushButton::clicked, this, &ProfileDialog::useProfile);
     connect(browseButton, &QPushButton::clicked, this, [this] {
-        const QString directory = QFileDialog::getExistingDirectory(
-            this, i18n("Select local directory"), m_directoryEdit->text());
+    const QString directory = QFileDialog::getExistingDirectory(
+        this, i18n("Select FUSE mount directory"), m_directoryEdit->text());
         if (!directory.isEmpty()) {
             m_directoryEdit->setText(directory);
         }
@@ -250,9 +252,8 @@ void ProfileDialog::loadProfile(const QString &name)
     const SyncProfile profile = m_store->load(name);
     m_nameEdit->setText(profile.name);
     m_backendCombo->setCurrentIndex(m_backendCombo->findData(syncBackendName(profile.backend)));
-    m_directoryEdit->setText(profile.localDirectory);
-    m_availabilityCombo->setCurrentIndex(
-        m_availabilityCombo->findData(localAvailabilityName(profile.availability)));
+    m_directoryEdit->setText(profile.mountDirectory);
+    m_availabilityCombo->setCurrentIndex(0);
     m_syncEnabledCheck->setChecked(profile.syncEnabled);
     m_globalSyncEnabledCheck->setChecked(m_store->globalSyncEnabled());
     m_remoteIntervalSpin->setValue(profile.remoteCheckIntervalSeconds);
@@ -269,9 +270,8 @@ void ProfileDialog::createProfile()
 {
     m_nameEdit->setText(QStringLiteral("graph-test"));
     m_backendCombo->setCurrentIndex(m_backendCombo->findData(QStringLiteral("graph")));
-    m_directoryEdit->setText(QDir::home().filePath(QStringLiteral("OneDrive-Graph-Test")));
-    m_availabilityCombo->setCurrentIndex(
-        m_availabilityCombo->findData(QStringLiteral("keep-local")));
+    m_directoryEdit->setText(QDir::home().filePath(QStringLiteral("Onedrive-Graph-Test")));
+    m_availabilityCombo->setCurrentIndex(0);
     m_syncEnabledCheck->setChecked(true);
     m_globalSyncEnabledCheck->setChecked(m_store->globalSyncEnabled());
     m_concurrentDownloadsSpin->setValue(2);
@@ -289,7 +289,7 @@ void ProfileDialog::saveProfile()
     const QString name = m_nameEdit->text().trimmed();
     if (name.isEmpty() || m_directoryEdit->text().trimmed().isEmpty()) {
         QMessageBox::warning(this, i18n("Invalid profile"),
-                             i18n("A profile name and local directory are required."));
+                             i18n("A profile name and FUSE mount directory are required."));
         return;
     }
 
@@ -299,15 +299,22 @@ void ProfileDialog::saveProfile()
     SyncProfile profile = m_store->load(name);
     profile.name = name;
     profile.backend = syncBackendFromName(m_backendCombo->currentData().toString());
-    profile.localDirectory = QDir::cleanPath(
+    profile.mountDirectory = QDir::cleanPath(
         QFileInfo(m_directoryEdit->text().trimmed()).absoluteFilePath());
-    profile.availability = localAvailabilityFromName(
-        m_availabilityCombo->currentData().toString());
+    // Keep the legacy field aligned for older clients; the service ignores it
+    // as a backing directory and derives a private cache from the profile key.
+    profile.localDirectory = profile.mountDirectory;
+    profile.availability = LocalAvailability::OnDemand;
     profile.syncEnabled = m_syncEnabledCheck->isChecked();
     profile.remoteCheckIntervalSeconds = m_remoteIntervalSpin->value();
     profile.concurrentDownloads = m_concurrentDownloadsSpin->value();
     profile.concurrentUploads = m_concurrentUploadsSpin->value();
     profile.concurrentLargeTransfers = m_concurrentLargeTransfersSpin->value();
+    // Rebuild folder policy from the tree instead of appending to the values
+    // loaded above; repeated saves must remain idempotent.
+    profile.includedFolders.clear();
+    profile.excludedFolders.clear();
+    profile.graphPathPolicies.clear();
     for (int row = 0; row < m_folderTree->topLevelItemCount(); ++row) {
         QTreeWidgetItem *item = m_folderTree->topLevelItem(row);
         if (item->checkState(1) == Qt::Checked) {
@@ -316,9 +323,17 @@ void ProfileDialog::saveProfile()
         if (item->checkState(2) == Qt::Checked) {
             profile.excludedFolders.append(item->text(0));
         }
+        if (auto *policy = qobject_cast<QComboBox *>(m_folderTree->itemWidget(item, 3))) {
+            const QString value = policy->currentData().toString();
+            if (!value.isEmpty() && value != QLatin1String("inherit")) {
+                profile.graphPathPolicies.append(item->text(0) + QLatin1Char('\t') + value);
+            }
+        }
     }
     profile.graphClientId = m_clientIdEdit->text().trimmed();
     profile.remoteDriveId = m_driveIdEdit->text().trimmed();
+    // Path-level controls will be populated by the policy editor; preserving
+    // this list here keeps a save of unrelated settings non-destructive.
     m_store->save(profile);
     m_store->setGlobalSyncEnabled(m_globalSyncEnabledCheck->isChecked());
     refreshProfileList(name);
@@ -396,12 +411,26 @@ void ProfileDialog::populateRemoteFolders()
     m_loadingFolders = true;
     const QStringList included = m_store->load(m_nameEdit->text().trimmed()).includedFolders;
     const QStringList excluded = m_store->load(m_nameEdit->text().trimmed()).excludedFolders;
+    const QStringList pathPolicies = m_store->load(m_nameEdit->text().trimmed()).graphPathPolicies;
     m_folderTree->clear();
     for (const QString &folder : m_controller->graphRemoteFolders()) {
         auto *item = new QTreeWidgetItem(m_folderTree, {folder});
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(1, included.contains(folder) ? Qt::Checked : Qt::Unchecked);
         item->setCheckState(2, excluded.contains(folder) ? Qt::Checked : Qt::Unchecked);
+        auto *policy = new QComboBox(m_folderTree);
+        policy->addItem(i18n("Inherit default"), QStringLiteral("inherit"));
+        policy->addItem(i18n("Keep local"), QStringLiteral("keep-local"));
+        policy->addItem(i18n("On demand"), QStringLiteral("on-demand"));
+        policy->addItem(i18n("Keep remote"), QStringLiteral("remote-only"));
+        const QString prefix = folder + QLatin1Char('\t');
+        for (const QString &record : pathPolicies) {
+            if (record.startsWith(prefix)) {
+                policy->setCurrentIndex(policy->findData(record.sliced(prefix.size())));
+                break;
+            }
+        }
+        m_folderTree->setItemWidget(item, 3, policy);
     }
     m_loadingFolders = false;
 }

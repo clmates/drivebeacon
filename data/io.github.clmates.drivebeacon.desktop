@@ -4,9 +4,9 @@
 Type=Application
 Name=DriveBeacon
 Name[es]=DriveBeacon
-Comment=System tray indicator for the abraunegg OneDrive client
-Comment[es]=Indicador de bandeja para el cliente OneDrive de abraunegg
-Exec=DriveBeacon
+Comment=System tray indicator for OneDrive synchronization
+Comment[es]=Indicador de bandeja para la sincronización de OneDrive
+Exec=@CMAKE_INSTALL_FULL_BINDIR@/DriveBeacon
 Icon=folder-cloud
 Terminal=false
 Categories=Qt;KDE;Network;FileTransfer;

@@ -102,11 +102,20 @@ target_compile_features(drivebeaconctl PRIVATE cxx_std_20)
 target_compile_definitions(drivebeaconctl PRIVATE DRIVEBEACON_VERSION="${PROJECT_VERSION}")
 target_link_libraries(drivebeaconctl PRIVATE Qt6::Core Qt6::DBus)
 
+# The FUSE helper is deliberately a separate process. The synchronization
+# service remains the owner of Graph credentials and network state, while this
+# process only translates filesystem operations into D-Bus requests.
+add_executable(drivebeacon-fs drivebeaconfs.cpp)
+target_compile_features(drivebeacon-fs PRIVATE cxx_std_20)
+target_compile_definitions(drivebeacon-fs PRIVATE DRIVEBEACON_VERSION="${PROJECT_VERSION}")
+target_link_libraries(drivebeacon-fs PRIVATE Qt6::Core Qt6::DBus PkgConfig::FUSE3)
+
 ecm_create_qm_loader(drivebeacon drivebeacon)
 
 install(TARGETS drivebeacon ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
 install(TARGETS drivebeacon-service ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
 install(TARGETS drivebeaconctl ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
+install(TARGETS drivebeacon-fs ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
 configure_file(
     "${CMAKE_SOURCE_DIR}/data/drivebeacon-service.service.in"
     "${CMAKE_CURRENT_BINARY_DIR}/drivebeacon-service.service"
@@ -115,7 +124,7 @@ configure_file(
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/drivebeacon-service.service"
     DESTINATION ${KDE_INSTALL_DATADIR}/systemd/user
 )
-install(PROGRAMS ../data/io.github.clmates.drivebeacon.desktop
+install(PROGRAMS "${CMAKE_BINARY_DIR}/share/applications/io.github.clmates.drivebeacon.desktop"
     DESTINATION ${KDE_INSTALL_APPDIR}
 )
 install(FILES ../data/io.github.clmates.drivebeacon.metainfo.xml

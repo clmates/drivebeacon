@@ -4,13 +4,6 @@ cmake_minimum_required(VERSION 3.20)
 
 project(drivebeacon VERSION 0.1.3 LANGUAGES CXX)
 
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share/applications")
-configure_file(
-    "${CMAKE_SOURCE_DIR}/data/io.github.clmates.drivebeacon.desktop"
-    "${CMAKE_BINARY_DIR}/share/applications/io.github.clmates.drivebeacon.desktop"
-    COPYONLY
-)
-
 find_package(ECM 6.0 REQUIRED NO_MODULE)
 set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 
@@ -20,6 +13,16 @@ include(ECMPoQmTools)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 include(KDEInstallDirs)
 include(KDECMakeSettings)
+
+# Resolve the executable through the selected install prefix. Desktop launchers
+# do not inherit the interactive shell PATH, so a user-local installation must
+# not accidentally start an older system-wide DriveBeacon binary.
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/share/applications")
+configure_file(
+    "${CMAKE_SOURCE_DIR}/data/io.github.clmates.drivebeacon.desktop"
+    "${CMAKE_BINARY_DIR}/share/applications/io.github.clmates.drivebeacon.desktop"
+    @ONLY
+)
 
 find_package(Qt6 6.7 REQUIRED COMPONENTS
     Core
@@ -36,6 +39,8 @@ find_package(KF6 6.0 REQUIRED COMPONENTS
     Wallet
     XmlGui
 )
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FUSE3 REQUIRED IMPORTED_TARGET fuse3)
 
 add_subdirectory(src)
 

@@ -99,6 +99,28 @@ int callServiceMethod(const QString &method, const QVariantList &arguments = {})
     return 0;
 }
 
+/** Rejects cache eviction locally when the selected profile keeps all files. */
+int evictPath(const QString &profile, const QString &relativePath)
+{
+    QDBusInterface service = serviceInterface();
+    if (!service.isValid()) {
+        return printError(service.lastError().message());
+    }
+    const QDBusMessage statusReply = service.call(QStringLiteral("profileStatus"), profile);
+    if (statusReply.type() == QDBusMessage::ErrorMessage || statusReply.arguments().isEmpty()) {
+        return printError(statusReply.errorMessage().isEmpty()
+                              ? QStringLiteral("Could not read profile status.")
+                              : statusReply.errorMessage());
+    }
+    const QVariantMap status = qdbus_cast<QVariantMap>(statusReply.arguments().constFirst());
+    const QString availability = status.value(QStringLiteral("availability")).toString();
+    if (availability == QLatin1String("keep-local")) {
+        return printError(QStringLiteral(
+            "Profile '%1' uses keep-local; set on-demand or remote-only first.").arg(profile));
+    }
+    return callServiceMethod(QStringLiteral("evictPath"), {profile, relativePath});
+}
+
 /** Controls the user-level systemd unit without requiring the tray process. */
 int controlService(const QString &action)
 {
@@ -123,6 +145,18 @@ int controlService(const QString &action)
     }
     return process.exitCode();
 }
+
+/** Requests the service-owned read-only FUSE view for one Graph profile. */
+int mountProfile(const QString &profile)
+{
+    return callServiceMethod(QStringLiteral("mountProfile"), {profile});
+}
+
+/** Requests a service-owned unmount without touching synchronized content. */
+int unmountProfile(const QString &profile)
+{
+    return callServiceMethod(QStringLiteral("unmountProfile"), {profile});
+}
 }
 
 /** Implements the non-interactive DriveBeacon service command-line client. */
@@ -144,7 +178,9 @@ int main(int argc, char *argv[])
         QStringLiteral("status, sync, refresh-folders, reload-profiles, pause, resume, "
                        "pause-profile <name>, resume-profile <name>, or service "
                        "<start|stop|restart>; set-availability <name> "
-                       "<keep-local|remote-only|on-demand>"));
+                       "<keep-local|remote-only|on-demand>; mount <name>; "
+                       "unmount <name>; materialize <name> <relative-path>; "
+                       "evict <name> <relative-path>"));
     parser.process(application);
 
     const QStringList arguments = parser.positionalArguments();
@@ -179,6 +215,19 @@ int main(int argc, char *argv[])
     if (command == QStringLiteral("set-availability") && arguments.size() == 3) {
         return callServiceMethod(QStringLiteral("setProfileAvailability"),
                                  {arguments.at(1), arguments.at(2)});
+    }
+    if (command == QStringLiteral("mount") && arguments.size() == 2) {
+        return mountProfile(arguments.at(1));
+    }
+    if (command == QStringLiteral("unmount") && arguments.size() == 2) {
+        return unmountProfile(arguments.at(1));
+    }
+    if (command == QStringLiteral("materialize") && arguments.size() == 3) {
+        return callServiceMethod(QStringLiteral("materializeFile"),
+                                 {arguments.at(1), arguments.at(2)});
+    }
+    if (command == QStringLiteral("evict") && arguments.size() == 3) {
+        return evictPath(arguments.at(1), arguments.at(2));
     }
     if (command == QStringLiteral("service") && arguments.size() == 2) {
         const QString action = arguments.at(1);

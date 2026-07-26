@@ -60,12 +60,18 @@ public Q_SLOTS:
     void setProfileSyncEnabled(const QString &profileName, bool enabled);
     /** Changes one named profile's local availability through the service. */
     void setProfileAvailability(const QString &profileName, const QString &availability);
+    /** Releases one cached file or folder without changing remote content. */
+    void evictPath(const QString &profileName, const QString &relativePath);
     /** Pauses or resumes all profiles through the service. */
     void setGlobalSyncEnabled(bool enabled);
     /** Requests discovery of profiles saved after the service started. */
     void reloadProfiles();
     /** Changes the persisted account used by the tray summary. */
     void setPrimaryProfile(const QString &profileName);
+    /** Requests a service-owned FUSE mount for one account. */
+    void mountProfile(const QString &profileName);
+    /** Requests a service-owned FUSE unmount for one account. */
+    void unmountProfile(const QString &profileName);
 
 Q_SIGNALS:
     /** Emitted when the service appears or disappears from the session bus. */

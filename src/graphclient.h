@@ -15,6 +15,7 @@
 #include <QTimer>
 #include <QSet>
 #include <QPointer>
+#include <QVariantList>
 
 #include <memory>
 
@@ -94,11 +95,11 @@ public:
     void fetchCurrentDrive(const QString &accessToken);
     /** Lists folders directly below the drive root for the profile editor. */
     void fetchRootFolders(const QString &driveId, const QString &accessToken);
-    /** Downloads the remote tree into localDirectory for the first sync slice. */
+    /** Enumerates the remote tree and reconciles it with the service cache. */
     void synchronize(const QString &driveId, const QString &accessToken,
                      const QString &localDirectory, const QStringList &includedFolders,
                      const QStringList &excludedFolders);
-    /** Re-enumerates selected folders while retaining the existing baseline. */
+    /** Re-enumerates selected folders against the service cache without resetting the baseline. */
     void refreshSelectedFolders(const QString &driveId, const QString &accessToken,
                                const QString &localDirectory,
                                const QStringList &includedFolders,
@@ -110,8 +111,10 @@ public:
     void stopMonitoring();
     /** Applies per-profile transfer limits before synchronization starts. */
     void configureTransferConcurrency(int downloads, int uploads, int largeTransfers);
-    /** Selects whether Graph content is materialized in the local directory. */
+    /** Sets the profile-wide fallback for materializing content in the service cache. */
     void setLocalAvailability(LocalAvailability availability);
+    /** Applies persisted path overrides; descendants inherit the nearest rule. */
+    void setPathPolicies(const QStringList &policies);
     /** Restores local signatures and starts local change monitoring without a full scan. */
     void initializeLocalMonitoring(const QStringList &signatures,
                                    const QStringList &remotePaths,
@@ -126,6 +129,12 @@ public:
     [[nodiscard]] QStringList remotePaths() const;
     /** Returns whether a transfer or serialized remote mutation is active. */
     [[nodiscard]] bool hasActiveTransfers() const;
+    /** Returns the current remote tree for a filesystem provider. */
+    [[nodiscard]] QVariantList remoteEntries() const;
+    /** Queues one remote file for a foreground filesystem read. */
+    void materializeFile(const QString &relativePath);
+    /** Evicts cached content without issuing any remote deletion. */
+    void evictPath(const QString &relativePath);
 
 Q_SIGNALS:
     /** Emitted when Graph returns a valid quota snapshot. */
@@ -199,7 +208,7 @@ private:
     void processPendingLocalOperations();
     /** Returns whether a path is covered by the include/exclude profile policy. */
     [[nodiscard]] bool isIncluded(const QString &relativePath) const;
-    /** Removes materialized files when a profile switches to RemoteOnly. */
+    /** Evicts cached files when a profile-wide RemoteOnly policy is applied. */
     void evictMaterializedFiles();
     /** Creates a zero-byte visible marker for a remote-only file. */
     void createPlaceholder(const QString &relativePath);
@@ -207,6 +216,12 @@ private:
     [[nodiscard]] bool shouldTraverse(const QString &relativePath) const;
     /** Converts a relative path into a confined local path or an empty path. */
     [[nodiscard]] QString safeLocalPath(const QString &relativePath) const;
+    /** Resolves the nearest inherited availability policy for a path. */
+    [[nodiscard]] LocalAvailability availabilityForPath(const QString &relativePath) const;
+    /** Returns whether a remote file should be downloaded without an explicit read. */
+    [[nodiscard]] bool shouldMaterializePath(const QString &relativePath) const;
+    /** Returns whether a path should be represented by a placeholder. */
+    [[nodiscard]] bool shouldKeepRemotePath(const QString &relativePath) const;
 
     QNetworkAccessManager m_network;
     /** Credentials and filters used by the initial synchronization operation. */
@@ -230,10 +245,15 @@ private:
     QHash<QString, QString> m_remotePathsById;
     /** Last accepted remote eTag per item; unchanged delta entries are ignored. */
     QHash<QString, QString> m_remoteEtags;
+    /** Remote sizes and folder markers used by FUSE stat/readdir responses. */
+    QHash<QString, qint64> m_remoteSizes;
+    QSet<QString> m_remoteFolders;
     /** SHA-256 signatures of local files at the last persisted baseline. */
     QHash<QString, QString> m_localSignatures;
     /** Paths occupied by zero-byte files that must never be uploaded. */
     QSet<QString> m_placeholderPaths;
+    /** Exact path policy overrides; folder rules apply to all descendants. */
+    QHash<QString, LocalAvailability> m_pathPolicies;
     /**
      * Metadata used to skip hashing files whose size and modification time
      * are unchanged since the previous local scan.
@@ -254,8 +274,12 @@ private:
     bool m_deltaPageFailed = false;
     /** Indicates that one or more uploads are active. */
     bool m_uploadInProgress = false;
-    /** False for RemoteOnly, where metadata is synchronized without content. */
+    /** True when the profile-wide fallback automatically materializes content. */
     bool m_materializeFiles = true;
+    /** Whether the profile-wide fallback owns placeholders and cache eviction. */
+    bool m_remoteOnlyMode = false;
+    /** Profile-wide fallback used when no path override matches. */
+    LocalAvailability m_defaultAvailability = LocalAvailability::KeepLocal;
     /** True while the current local-change batch still has queued work. */
     bool m_uploadBatchActive = false;
     bool m_deleteInProgress = false;
@@ -270,6 +294,8 @@ private:
      */
     QSet<QString> m_suppressedRemoteItemIds;
     QSet<QString> m_suppressedRemotePaths;
+    /** Remote-only/on-demand paths explicitly requested by the FUSE reader. */
+    QSet<QString> m_requestedMaterializations;
     /** Progress counters for the currently active download batch. */
     int m_downloadedFiles = 0;
     int m_totalFiles = 0;

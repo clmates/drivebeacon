@@ -457,7 +457,10 @@ void GraphClient::configureTransferConcurrency(int downloads, int uploads, int l
 
 void GraphClient::setLocalAvailability(LocalAvailability availability)
 {
+    m_defaultAvailability = availability;
     const bool materializeFiles = availability == LocalAvailability::KeepLocal;
+    const bool remoteOnly = availability == LocalAvailability::RemoteOnly;
+    m_remoteOnlyMode = remoteOnly;
     if (m_materializeFiles && !materializeFiles) {
         // Flip the guard before any cleanup so a timer callback cannot observe
         // the evicted files and enqueue remote deletions during this switch.
@@ -465,20 +468,69 @@ void GraphClient::setLocalAvailability(LocalAvailability availability)
         if (m_activeDeleteReply) {
             m_activeDeleteReply->abort();
         }
-        // A local-only operation queued before the transition must not leak
-        // into the remote drive after the policy has become RemoteOnly.
+        // A local-only operation queued before a non-materialized policy must
+        // not leak into the remote drive after the policy transition.
         m_pendingUploads.clear();
         m_pendingRemoteDeletes.clear();
         m_pendingRemoteRenames.clear();
         m_pendingRemoteDeletePaths.clear();
         m_uploadBatchActive = false;
-        // A policy transition has explicit meaning: remote content is no
-        // longer meant to occupy local storage. Evict only files represented
-        // by the known local baseline; unrelated user files remain untouched.
-        evictMaterializedFiles();
+        // Only RemoteOnly promises that local content is absent. OnDemand
+        // keeps an existing cache and lets FUSE fetch missing files explicitly.
+        if (m_remoteOnlyMode) {
+            evictMaterializedFiles();
+        }
         return;
     }
     m_materializeFiles = materializeFiles;
+}
+
+void GraphClient::setPathPolicies(const QStringList &policies)
+{
+    m_pathPolicies.clear();
+    for (const QString &record : policies) {
+        const int separator = record.indexOf(QLatin1Char('\t'));
+        if (separator <= 0) {
+            continue;
+        }
+        const QString path = QDir::cleanPath(record.left(separator)).trimmed();
+        if (path.isEmpty() || path == QLatin1String(".")) {
+            continue;
+        }
+        const QString policy = record.sliced(separator + 1).trimmed().toLower();
+        const LocalAvailability availability = policy == QLatin1String("keep-local")
+            ? LocalAvailability::KeepLocal
+            : policy == QLatin1String("remote-only")
+                ? LocalAvailability::RemoteOnly
+                : LocalAvailability::OnDemand;
+        m_pathPolicies.insert(path, availability);
+    }
+}
+
+LocalAvailability GraphClient::availabilityForPath(const QString &relativePath) const
+{
+    QString candidate = QDir::cleanPath(relativePath).trimmed();
+    while (!candidate.isEmpty() && candidate != QLatin1String(".")) {
+        if (m_pathPolicies.contains(candidate)) {
+            return m_pathPolicies.value(candidate);
+        }
+        const int separator = candidate.lastIndexOf(QLatin1Char('/'));
+        if (separator < 0) {
+            break;
+        }
+        candidate.truncate(separator);
+    }
+    return m_defaultAvailability;
+}
+
+bool GraphClient::shouldMaterializePath(const QString &relativePath) const
+{
+    return availabilityForPath(relativePath) == LocalAvailability::KeepLocal;
+}
+
+bool GraphClient::shouldKeepRemotePath(const QString &relativePath) const
+{
+    return availabilityForPath(relativePath) == LocalAvailability::RemoteOnly;
 }
 
 void GraphClient::setPlaceholderPaths(const QStringList &paths)
@@ -522,23 +574,68 @@ void GraphClient::initializeLocalMonitoring(const QStringList &signatures,
     m_remoteItemIds.clear();
     m_remotePathsById.clear();
     m_remoteEtags.clear();
+    m_remoteSizes.clear();
+    m_remoteFolders.clear();
     for (const QString &entry : remotePaths) {
         const int separator = entry.indexOf(QLatin1Char('\t'));
         const int etagSeparator = entry.indexOf(QLatin1Char('\t'), separator + 1);
+        const int sizeSeparator = etagSeparator < 0
+            ? -1 : entry.indexOf(QLatin1Char('\t'), etagSeparator + 1);
         if (separator > 0) {
             const QString itemId = entry.left(separator);
             const QString path = etagSeparator < 0
                 ? entry.sliced(separator + 1)
                 : entry.sliced(separator + 1, etagSeparator - separator - 1);
-            const QString etag = etagSeparator < 0 ? QString() : entry.sliced(etagSeparator + 1);
+            const QString etag = etagSeparator < 0 ? QString()
+                : entry.sliced(etagSeparator + 1,
+                               (sizeSeparator < 0 ? entry.size() : sizeSeparator)
+                                   - etagSeparator - 1);
             m_remotePathsById.insert(itemId, path);
             m_remoteEtags.insert(itemId, etag);
+            if (sizeSeparator >= 0) {
+                bool sizeOk = false;
+                const qint64 size = entry.sliced(sizeSeparator + 1).toLongLong(&sizeOk);
+                if (sizeOk) {
+                    m_remoteSizes.insert(path, size);
+                }
+            }
             if (!path.isEmpty() && path != QStringLiteral("/")) {
                 m_remoteItemIds.insert(path, itemId);
             }
         }
     }
-    if (!m_materializeFiles) {
+    // A previous interrupted materialization can leave a stale placeholder
+    // marker even though the local baseline already contains real content.
+    // Reconcile that marker before exposing the tree to FUSE.
+    bool placeholdersChanged = false;
+    for (auto it = m_placeholderPaths.cbegin(); it != m_placeholderPaths.cend();) {
+        if (m_localSignatures.contains(*it) && !localFileSignature(*it).isEmpty()) {
+            it = m_placeholderPaths.erase(it);
+            placeholdersChanged = true;
+        } else {
+            ++it;
+        }
+    }
+    if (placeholdersChanged) {
+        Q_EMIT placeholderStateChanged(placeholderPaths());
+    }
+    // The persisted baseline predates the explicit folder index. Recover
+    // directory entries from descendants so a restart does not expose a
+    // parent such as Documentos as a regular file to FUSE or the scheduler.
+    const QStringList persistedPaths = m_remotePathsById.values();
+    for (const QString &path : persistedPaths) {
+        if (path.isEmpty() || path == QLatin1String("/")) {
+            continue;
+        }
+        const QString prefix = path + QLatin1Char('/');
+        for (const QString &candidate : persistedPaths) {
+            if (candidate.startsWith(prefix)) {
+                m_remoteFolders.insert(path);
+                break;
+            }
+        }
+    }
+    if (m_remoteOnlyMode) {
         // Also enforce RemoteOnly after a restart, once the persisted local
         // signatures have been loaded into memory.
         evictMaterializedFiles();
@@ -620,8 +717,13 @@ QStringList GraphClient::remotePaths() const
     QStringList result;
     result.reserve(m_remotePathsById.size());
     for (auto it = m_remotePathsById.cbegin(); it != m_remotePathsById.cend(); ++it) {
-        result.append(it.key() + QLatin1Char('\t') + it.value()
-                      + QLatin1Char('\t') + m_remoteEtags.value(it.key()));
+        QString serialized = it.key() + QLatin1Char('\t') + it.value()
+            + QLatin1Char('\t') + m_remoteEtags.value(it.key());
+        if (m_remoteSizes.contains(it.value())) {
+            serialized += QLatin1Char('\t')
+                + QString::number(m_remoteSizes.value(it.value()));
+        }
+        result.append(serialized);
     }
     return result;
 }
@@ -630,6 +732,129 @@ bool GraphClient::hasActiveTransfers() const
 {
     return !m_activeDownloads.isEmpty() || !m_activeUploads.isEmpty()
         || m_deleteInProgress || m_renameInProgress;
+}
+
+QVariantList GraphClient::remoteEntries() const
+{
+    QVariantList entries;
+    for (auto it = m_remotePathsById.cbegin(); it != m_remotePathsById.cend(); ++it) {
+        const QString path = it.value();
+        if (path.isEmpty() || path == QLatin1String("/")) {
+            continue;
+        }
+        QVariantMap entry;
+        entry.insert(QStringLiteral("path"), path);
+        entry.insert(QStringLiteral("id"), it.key());
+        entry.insert(QStringLiteral("folder"), m_remoteFolders.contains(path));
+        entry.insert(QStringLiteral("placeholder"), m_placeholderPaths.contains(path));
+        entry.insert(QStringLiteral("sizeKnown"), m_remoteSizes.contains(path));
+        entry.insert(QStringLiteral("size"), m_remoteSizes.value(path, 0));
+        entries.append(entry);
+    }
+    return entries;
+}
+
+void GraphClient::materializeFile(const QString &relativePath)
+{
+    const QString normalized = QDir::cleanPath(relativePath).trimmed();
+    if (normalized.isEmpty() || normalized == QLatin1String(".")) {
+        Q_EMIT errorOccurred(QStringLiteral("A relative file path is required."));
+        return;
+    }
+    const QString itemId = m_remoteItemIds.value(normalized);
+    if (itemId.isEmpty()) {
+        Q_EMIT errorOccurred(QStringLiteral("Remote file is not indexed: %1").arg(normalized));
+        return;
+    }
+    const QString localPath = safeLocalPath(normalized);
+    if (localPath.isEmpty()) {
+        Q_EMIT errorOccurred(QStringLiteral("Unsafe remote path rejected: %1").arg(normalized));
+        return;
+    }
+    if (QFileInfo(localPath).isFile() && !m_placeholderPaths.contains(normalized)) {
+        return;
+    }
+    // The request is kept separate from the availability policy: RemoteOnly
+    // still avoids normal downloads, but a FUSE read is an explicit exception.
+    m_requestedMaterializations.insert(normalized);
+    bool queued = false;
+    for (const GraphSyncFile &file : std::as_const(m_pendingFiles)) {
+        if (file.relativePath == normalized) {
+            queued = true;
+            break;
+        }
+    }
+    if (!queued) {
+        m_pendingFiles.enqueue({itemId, normalized, m_remoteSizes.value(normalized, -1)});
+    }
+    processNextFile();
+}
+
+void GraphClient::evictPath(const QString &relativePath)
+{
+    const QString normalized = QDir::cleanPath(relativePath).trimmed();
+    if (normalized.isEmpty() || normalized == QLatin1String(".")) {
+        Q_EMIT errorOccurred(QStringLiteral("A relative file or folder path is required."));
+        return;
+    }
+    if (m_materializeFiles) {
+        Q_EMIT errorOccurred(QStringLiteral(
+            "Evicting cached content requires the on-demand or remote-only policy."));
+        return;
+    }
+    const QString localRoot = safeLocalPath(normalized);
+    if (localRoot.isEmpty()) {
+        Q_EMIT errorOccurred(QStringLiteral("Unsafe local path rejected: %1").arg(normalized));
+        return;
+    }
+
+    const QString prefix = normalized + QLatin1Char('/');
+    QStringList files;
+    for (auto it = m_remoteItemIds.cbegin(); it != m_remoteItemIds.cend(); ++it) {
+        if (it.key() == normalized || it.key().startsWith(prefix)) {
+            if (!m_remoteFolders.contains(it.key())) {
+                files.append(it.key());
+            }
+        }
+    }
+    for (const QString &path : m_localSignatures.keys()) {
+        if (m_remoteItemIds.contains(path)
+            && (path == normalized || path.startsWith(prefix))) {
+            files.append(path);
+        }
+    }
+    files.removeDuplicates();
+    std::sort(files.begin(), files.end());
+    if (files.isEmpty()) {
+        Q_EMIT errorOccurred(QStringLiteral("Remote file or folder is not indexed: %1")
+                                 .arg(normalized));
+        return;
+    }
+
+    // Validate every file first, so a dirty file cannot leave a folder half
+    // evicted while a later file is protected from data loss.
+    for (const QString &path : files) {
+        const QString current = localFileSignature(path);
+        const QString baseline = m_localSignatures.value(path);
+        if (!current.isEmpty() && baseline.isEmpty()) {
+            Q_EMIT errorOccurred(QStringLiteral("Local file is not tracked: %1").arg(path));
+            return;
+        }
+        if (!current.isEmpty() && !baseline.isEmpty() && current != baseline) {
+            Q_EMIT errorOccurred(QStringLiteral("Local changes must be uploaded first: %1")
+                                     .arg(path));
+            return;
+        }
+    }
+
+    for (const QString &path : files) {
+        createPlaceholder(path);
+        m_localSignatures.remove(path);
+        m_localMetadata.remove(path);
+        log(QStringLiteral("Graph sync: evicted local %1 (On demand)").arg(path));
+    }
+    Q_EMIT placeholderStateChanged(placeholderPaths());
+    Q_EMIT localStateChanged(localSignatures(), remotePaths());
 }
 
 void GraphClient::fetchQuota(const QString &driveId, const QString &accessToken)
@@ -882,6 +1107,8 @@ void GraphClient::processNextFolder()
             }
             if (item.contains(QStringLiteral("folder"))) {
                 ++foldersFound;
+                m_remoteFolders.insert(relativePath);
+                m_remoteSizes.insert(relativePath, 0);
                 m_remotePathsById.insert(item.value(QStringLiteral("id")).toString(), relativePath);
                 m_remoteEtags.insert(item.value(QStringLiteral("id")).toString(),
                                      item.value(QStringLiteral("eTag")).toString());
@@ -892,7 +1119,8 @@ void GraphClient::processNextFolder()
                 }
                 m_remoteFolderIds.insert(relativePath, item.value(QStringLiteral("id")).toString());
                 const QString localPath = safeLocalPath(relativePath);
-                if (m_materializeFiles && !localPath.isEmpty() && !QDir().mkpath(localPath)) {
+                if (shouldMaterializePath(relativePath) && !localPath.isEmpty()
+                    && !QDir().mkpath(localPath)) {
                     Q_EMIT errorOccurred(QStringLiteral("Could not create local folder: %1").arg(relativePath));
                     return;
                 }
@@ -915,6 +1143,7 @@ void GraphClient::processNextFolder()
                 m_remotePathsById.insert(itemId, relativePath);
                 m_remoteEtags.insert(itemId, eTag);
                 m_remoteItemIds.insert(relativePath, itemId);
+                m_remoteSizes.insert(relativePath, remoteSize);
                 if (!alreadyCurrent) {
                     m_pendingFiles.enqueue({itemId, relativePath,
                                             item.value(QStringLiteral("size")).toVariant().toLongLong()});
@@ -959,10 +1188,14 @@ void GraphClient::processNextFolder()
                     const QString relativePath = folder.relativePath.isEmpty()
                         ? name : folder.relativePath + QLatin1Char('/') + name;
                     if (item.contains(QStringLiteral("folder"))) {
+                        m_remoteFolders.insert(relativePath);
+                        m_remoteSizes.insert(relativePath, 0);
+                        m_remotePathsById.insert(item.value(QStringLiteral("id")).toString(),
+                                                 relativePath);
                         m_remoteFolderIds.insert(relativePath, item.value(QStringLiteral("id")).toString());
                         if (isIncluded(relativePath)) {
                             const QString localPath = safeLocalPath(relativePath);
-                            if (m_materializeFiles && !localPath.isEmpty()) {
+                            if (shouldMaterializePath(relativePath) && !localPath.isEmpty()) {
                                 QDir().mkpath(localPath);
                             }
                             if (shouldTraverse(relativePath)) {
@@ -986,6 +1219,7 @@ void GraphClient::processNextFolder()
                         m_remotePathsById.insert(itemId, relativePath);
                         m_remoteEtags.insert(itemId, eTag);
                         m_remoteItemIds.insert(relativePath, itemId);
+                        m_remoteSizes.insert(relativePath, remoteSize);
                         if (!alreadyCurrent) {
                             m_pendingFiles.enqueue({itemId, relativePath,
                                                     item.value(QStringLiteral("size"))
@@ -1005,14 +1239,21 @@ void GraphClient::processNextFile()
 {
     // Transfer callbacks re-enter this scheduler. The delta cursor is
     // persisted only after every file in the page is durable on disk.
-    if (!m_materializeFiles) {
-        // A RemoteOnly pass acknowledges the remote page and persists its
-        // identity baseline, while leaving visible placeholders in the tree.
-        while (!m_pendingFiles.isEmpty()) {
-            createPlaceholder(m_pendingFiles.dequeue().relativePath);
+    // Filter by the inherited path policy. Keep-local paths download even
+    // when the profile default is on-demand; keep-remote paths retain only a
+    // placeholder; ordinary on-demand paths wait for a FUSE read.
+    QQueue<GraphSyncFile> deferredFiles;
+    while (!m_pendingFiles.isEmpty()) {
+        const GraphSyncFile file = m_pendingFiles.dequeue();
+        if (m_requestedMaterializations.contains(file.relativePath)
+            || shouldMaterializePath(file.relativePath)) {
+            deferredFiles.enqueue(file);
+        } else if (shouldKeepRemotePath(file.relativePath)) {
+            createPlaceholder(file.relativePath);
         }
-        Q_EMIT placeholderStateChanged(placeholderPaths());
     }
+    m_pendingFiles = std::move(deferredFiles);
+    Q_EMIT placeholderStateChanged(placeholderPaths());
     startPendingDownloads();
     if (m_pendingFiles.isEmpty() && m_activeDownloads.isEmpty()) {
         if (!m_deltaPageFailed && !m_pendingDeltaLink.isEmpty()) {
@@ -1225,6 +1466,7 @@ void GraphClient::processDownloadedReply(QNetworkReply *reply,
         return;
     }
     m_activeDownloads.remove(transfer->file.relativePath);
+    m_requestedMaterializations.remove(transfer->file.relativePath);
     logProgress(QStringLiteral("Graph sync: downloaded %1 (100%, %2 MiB)")
             .arg(transfer->file.relativePath).arg(transfer->bytes / (1024 * 1024)));
     const QString signature = localFileSignature(transfer->localPath);
@@ -1249,7 +1491,7 @@ void GraphClient::processDownloadedReply(QNetworkReply *reply,
 
 void GraphClient::scanLocalChanges()
 {
-    if (!m_materializeFiles || m_renameInProgress || m_syncDirectory.isEmpty()) {
+    if (m_renameInProgress || m_syncDirectory.isEmpty()) {
         return;
     }
     // Scanning must continue while transfers are active: a newly copied small
@@ -1343,15 +1585,6 @@ void GraphClient::scanLocalChanges()
 
 void GraphClient::processPendingLocalOperations()
 {
-    if (!m_materializeFiles) {
-        // RemoteOnly is a hard boundary: no local observation may produce a
-        // remote mutation, including work that was queued before the switch.
-        m_pendingRemoteRenames.clear();
-        m_pendingRemoteDeletes.clear();
-        m_pendingRemoteDeletePaths.clear();
-        m_pendingUploads.clear();
-        return;
-    }
     if (m_renameInProgress || !m_pendingRemoteRenames.isEmpty()) {
         renameNextRemoteFile();
         return;
@@ -1362,7 +1595,7 @@ void GraphClient::processPendingLocalOperations()
 
 void GraphClient::renameNextRemoteFile()
 {
-    if (!m_materializeFiles || m_renameInProgress || m_pendingRemoteRenames.isEmpty()) {
+    if (m_renameInProgress || m_pendingRemoteRenames.isEmpty()) {
         return;
     }
     m_renameInProgress = true;
@@ -1412,7 +1645,7 @@ void GraphClient::renameNextRemoteFile()
 
 void GraphClient::deleteNextRemoteFile()
 {
-    if (!m_materializeFiles || m_deleteInProgress || m_pendingRemoteDeletes.isEmpty()) {
+    if (m_deleteInProgress || m_pendingRemoteDeletes.isEmpty()) {
         return;
     }
     m_deleteInProgress = true;
@@ -1429,12 +1662,6 @@ void GraphClient::deleteNextRemoteFile()
         const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
         if (m_activeDeleteReply == reply) {
             m_activeDeleteReply.clear();
-        }
-        if (!m_materializeFiles) {
-            // The request was cancelled while entering RemoteOnly. Do not
-            // mutate baselines or start another remote deletion from here.
-            m_deleteInProgress = false;
-            return;
         }
         if (reply->error() != QNetworkReply::NoError) {
             const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -1475,10 +1702,6 @@ void GraphClient::deleteNextRemoteFile()
 
 void GraphClient::uploadNextLocalFile()
 {
-    if (!m_materializeFiles) {
-        m_pendingUploads.clear();
-        return;
-    }
     startPendingUploads();
     if (m_uploadBatchActive && m_pendingUploads.isEmpty() && m_activeUploads.isEmpty()) {
         m_uploadBatchActive = false;

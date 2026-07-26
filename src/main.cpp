@@ -69,7 +69,7 @@ int main(int argc, char *argv[])
                            i18n("Override the profile backend (abraunegg-journal or graph)."),
                            QStringLiteral("backend")});
     commandLine.addOption({QStringLiteral("local-directory"),
-                           i18n("Override the profile local directory."),
+                           i18n("Override the profile FUSE mount directory."),
                            QStringLiteral("path")});
     commandLine.process(application);
 
@@ -285,6 +285,7 @@ int main(int argc, char *argv[])
         QAction *keepLocal = nullptr;
         QAction *remoteOnly = nullptr;
         QAction *onDemand = nullptr;
+        QAction *mount = nullptr;
         QAction *resync = nullptr;
         QAction *primary = nullptr;
         QActionGroup *availabilityGroup = nullptr;
@@ -328,6 +329,7 @@ int main(int argc, char *argv[])
                 items.keepLocal = addAvailabilityAction(QStringLiteral("keep-local"));
                 items.remoteOnly = addAvailabilityAction(QStringLiteral("remote-only"));
                 items.onDemand = addAvailabilityAction(QStringLiteral("on-demand"));
+                items.mount = items.menu->addAction(QString());
                 items.resync = items.menu->addAction(i18n("Force remote resync"));
                 items.primary = items.menu->addAction(QString());
                 QObject::connect(items.toggleSync, &QAction::triggered, &application,
@@ -339,6 +341,15 @@ int main(int argc, char *argv[])
                 QObject::connect(items.resync, &QAction::triggered, &application,
                                  [&serviceClient, profile] {
                                      serviceClient.forceRemoteResync(profile);
+                                 });
+                QObject::connect(items.mount, &QAction::triggered, &application,
+                                 [&serviceClient, profile] {
+                                     const QVariantMap status = serviceClient.profileStatus(profile);
+                                     if (status.value(QStringLiteral("mounted")).toBool()) {
+                                         serviceClient.unmountProfile(profile);
+                                     } else {
+                                         serviceClient.mountProfile(profile);
+                                     }
                                  });
                 QObject::connect(items.primary, &QAction::triggered, &application,
                                  [&serviceClient, profile] {
@@ -367,12 +378,15 @@ int main(int argc, char *argv[])
             items.keepLocal->setText(i18n("Keep local"));
             items.remoteOnly->setText(i18n("Remote only"));
             items.onDemand->setText(i18n("Download on demand"));
+            const bool mounted = status.value(QStringLiteral("mounted")).toBool();
+            items.mount->setText(mounted ? i18n("Unmount FUSE view") : i18n("Mount FUSE view"));
             items.keepLocal->setChecked(availability == QLatin1String("keep-local"));
             items.remoteOnly->setChecked(availability == QLatin1String("remote-only"));
             items.onDemand->setChecked(availability == QLatin1String("on-demand"));
             items.toggleSync->setEnabled(loaded);
             items.resync->setEnabled(loaded && authenticated && syncEnabled
                                      && availability == QLatin1String("keep-local"));
+            items.mount->setEnabled(loaded && authenticated);
             items.primary->setText(profile == serviceClient.primaryProfileName()
                                         ? i18n("Primary account") : i18n("Use as primary account"));
             items.primary->setEnabled(profile != serviceClient.primaryProfileName());
@@ -447,10 +461,14 @@ int main(int argc, char *argv[])
         startAction->setEnabled(serviceControl && !running);
         stopAction->setEnabled(serviceControl && running);
         restartAction->setEnabled(serviceControl && running);
+        // A control tray must remain discoverable while synchronization is
+        // stopped or no profile has been configured. Plasma hides Passive
+        // items by default, which would make the configuration entry
+        // unreachable after a clean installation. Reserve NeedsAttention
+        // for actual failures and keep all ordinary states visible.
         tray.setStatus(serviceState == QLatin1String("failed")
                            ? KStatusNotifierItem::NeedsAttention
-                           : running ? KStatusNotifierItem::Active
-                                     : KStatusNotifierItem::Passive);
+                           : KStatusNotifierItem::Active);
         tray.setToolTip(QStringLiteral("folder-cloud"), i18n("DriveBeacon"),
                         controller.statusText());
     };

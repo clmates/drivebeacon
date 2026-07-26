@@ -8,7 +8,8 @@ from the systemd journal, and navigation to affected local folders.
 The application supports the existing journal backend and an incremental native
 Microsoft Graph backend. Graph authenticates, restores sessions from the
 desktop wallet, reports quota, and synchronizes selected files in both
-directions for profiles that keep local copies.
+directions. The headless service keeps content in a private per-profile cache;
+the optional read-only FUSE view exposes it through a user-selected mount path.
 
 The tray model includes remote storage capacity fields (used, available, and
 total). They remain unavailable until a Graph profile has authenticated and
@@ -50,11 +51,10 @@ authorization, DriveBeacon captures the localhost redirect automatically when
 the application registration includes the callback. The manual response URL
 field remains available as a fallback. DriveBeacon then discovers the default
 drive, stores its ID and quota, lists the folders directly below the drive root,
-and synchronizes files with the local directory. The profile dialog presents
+and synchronizes files with the service cache. The profile dialog presents
 those folders in a tree with independent **Sync** and **Exclude** checkboxes;
 selecting one automatically clears the other. The client ID must belong to a
-public desktop application. Local files up to 250 MiB are uploaded directly;
-larger-file upload sessions and conflict resolution remain future work.
+public desktop application. Large files use resumable Graph upload sessions.
 Remote changes are checked with a persisted Microsoft Graph delta cursor and
 local SHA-256 baseline. A profile with valid sync state can restart without
 replaying the initial download. The profile dialog controls the remote check
@@ -70,11 +70,64 @@ delta cursor while creating zero-byte placeholders at the remote paths. The
 placeholders are persisted and excluded from local change detection; remote
 renames and deletions update them without creating remote mutations. Switching
 to this policy evicts the corresponding local content, while files outside the
-known baseline remain untouched. `Download on demand` remains represented
-in the profile model but requires the future filesystem-provider integration;
-until then it reports that limitation instead of silently pretending to offer
-placeholders. SharePoint libraries and a filesystem provider remain subsequent
-roadmap steps.
+known baseline remain untouched. `Download on demand` materializes a file when
+an application reads it through the FUSE view. Folder policies inherit from
+their nearest configured parent and can keep selected folders local.
+
+## FAQ: unexpected downloads from the FUSE view
+
+### Why did opening a folder download many files?
+
+Listing a FUSE directory only requests names and metadata. Desktop applications
+may nevertheless open files in the background to create previews, thumbnails,
+media metadata, search indexes, or playlists. DriveBeacon treats every real
+file `open` as a read and materializes that file. This is required for normal
+applications to access the filesystem transparently.
+
+### Why does Dolphin preview a FUSE file as local storage?
+
+The FUSE mount is a local filesystem path such as `~/Onedrive-Graph-Test`, so
+Dolphin applies its local-storage preview settings rather than its remote-KIO
+settings. Disable Dolphin's preview panel and local thumbnails for this mount
+if browsing should remain metadata-only. Baloo file indexing should also
+exclude the mount:
+
+```bash
+balooctl6 config add excludeFolders "$HOME/Onedrive-Graph-Test"
+balooctl6 config show excludeFolders
+```
+
+### Why did opening one video download all videos in its folder?
+
+Some media players offer an option such as “play all videos in the folder” or
+automatically build a playlist. Haruna, VLC, and mpv-based players can then
+open every sibling video. Disable that option or open the file in single-file
+mode. The FUSE journal shows the difference:
+
+```bash
+journalctl --user -t drivebeacon-fs -f
+```
+
+`getattr` and `readdir` are metadata operations; repeated `open` and `opened
+cache` lines identify the application causing materialization.
+
+### How can I check whether DriveBeacon itself is downloading files?
+
+Inspect the service and FUSE logs separately:
+
+```bash
+journalctl --user -u drivebeacon-service.service -f
+journalctl --user -t drivebeacon-fs -f
+```
+
+A viewer-caused download normally appears as an `open` in the FUSE log before
+the Graph transfer begins.
+
+### Where are the cache and visible files?
+
+The visible path is the profile's FUSE mount directory. The service cache is
+private and stored below `~/.local/share/drivebeacon/cache/<profile>`. Unmounting
+the FUSE view does not delete the cache or remote files.
 
 DriveBeacon is an independent open-source project. It is not affiliated with or
 endorsed by Microsoft Corporation or KDE e.V. OneDrive is a trademark of
