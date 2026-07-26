@@ -170,7 +170,7 @@ public:
         // folder queues all descendants, while a file is fetched by the
         // explicit Keep Local action or when it is actually opened.
         auto *keepLocal = new QAction(QIcon::fromTheme(QStringLiteral("emblem-synchronized")),
-                                      i18n("Keep Local"), this);
+                                      i18n("DriveBeacon – Keep Local"), this);
         keepLocal->setToolTip(i18n("Keep selected content in the local cache using profile %1 (%2)")
                                   .arg(matchedProfile->name, state));
         QObject::connect(keepLocal, &QAction::triggered, this,
@@ -182,7 +182,7 @@ public:
         result.append(keepLocal);
 
         auto *evict = new QAction(QIcon::fromTheme(QStringLiteral("drive-harddisk")),
-                                  i18n("Release Local cache"), this);
+                                  i18n("DriveBeacon – Release Local cache"), this);
         evict->setToolTip(i18n("Release cached content using profile %1 (%2)")
                               .arg(matchedProfile->name, state));
         QObject::connect(evict, &QAction::triggered, this,
