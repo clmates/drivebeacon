@@ -166,7 +166,12 @@ and FUSE as the primary architecture while documenting abraunegg as optional
 compatibility. The unused `TokenStore::remove()` helper was also removed because
 profile deletion is not implemented yet; credential cleanup will be introduced
 with that complete local-only deletion workflow. The remaining API and parsing
-review is still pending.
+review is now limited to documented compatibility surfaces. The two Dolphin
+plugins now share one persisted Graph mount-state reader and one safe relative
+path resolver. `DriveBeaconServiceClient::evictPath` remains intentionally
+public as the future tray-side action path; `clearError`, `cancelGraphLogin`,
+and the legacy systemd manager remain lifecycle/compatibility APIs rather than
+being removed solely because their current call sites are sparse.
 
 ## Pending points from the previous plan
 

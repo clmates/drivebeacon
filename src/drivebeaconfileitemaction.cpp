@@ -6,74 +6,17 @@
 #include <KLocalizedString>
 #include <KPluginFactory>
 
+#include "drivebeaconmountstate.h"
+
 #include <QAction>
-#include <QDir>
-#include <QFileInfo>
 #include <QIcon>
 #include <QProcess>
-#include <QSettings>
 #include <QStandardPaths>
 #include <QUrl>
 
 #include <utility>
 
 namespace {
-
-struct MountedProfile
-{
-    QString name;
-    QString mountDirectory;
-    QStringList placeholders;
-    QStringList localSignatures;
-};
-
-/** Loads only Graph profiles because the plugin operates on the Graph FUSE view. */
-QList<MountedProfile> configuredProfiles()
-{
-    // Dolphin owns the process-wide QSettings identity, so the default
-    // constructor would read Dolphin's settings instead of DriveBeacon's.
-    const QString configFile = QDir(QStandardPaths::writableLocation(QStandardPaths::ConfigLocation))
-                                   .filePath(QStringLiteral("clmates/drivebeacon.conf"));
-    QSettings settings(configFile, QSettings::IniFormat);
-    settings.beginGroup(QStringLiteral("profiles"));
-    QList<MountedProfile> profiles;
-    for (const QString &name : settings.childGroups()) {
-        settings.beginGroup(name);
-        if (settings.value(QStringLiteral("backend")).toString() != QLatin1String("graph")) {
-            settings.endGroup();
-            continue;
-        }
-
-        const QString mountDirectory = settings.value(QStringLiteral("mountDirectory"),
-                                                       settings.value(QStringLiteral("localDirectory")))
-                                           .toString();
-        if (!mountDirectory.isEmpty()) {
-            MountedProfile profile;
-            profile.name = name;
-            profile.mountDirectory = QDir::cleanPath(QFileInfo(mountDirectory).absoluteFilePath());
-            profile.placeholders = settings.value(QStringLiteral("graphPlaceholderPaths"))
-                                       .toStringList();
-            profile.localSignatures = settings.value(QStringLiteral("graphLocalSignatures"))
-                                          .toStringList();
-            profiles.append(std::move(profile));
-        }
-        settings.endGroup();
-    }
-    return profiles;
-}
-
-/** Converts a selected local URL into a safe relative Graph path. */
-QString relativePath(const QString &mountDirectory, const QUrl &url)
-{
-    const QString localPath = QDir::cleanPath(QFileInfo(url.toLocalFile()).absoluteFilePath());
-    const QDir mount(QDir::cleanPath(QFileInfo(mountDirectory).absoluteFilePath()));
-    const QString relative = QDir::cleanPath(mount.relativeFilePath(localPath));
-    if (relative.isEmpty() || relative == QLatin1String(".") || relative == QLatin1String("..")
-        || relative.startsWith(QStringLiteral("../"))) {
-        return {};
-    }
-    return relative;
-}
 
 /** Starts the CLI asynchronously so Dolphin never waits on network activity. */
 bool startDriveBeaconCtl(const QString &command, const QString &profile,
@@ -98,9 +41,9 @@ bool startDriveBeaconCtl(const QString &command, const QString &profile,
 }
 
 /** Describes whether the selected path is currently represented by cache data. */
-QString pathState(const MountedProfile &profile, const QString &path)
+QString pathState(const DriveBeaconMountState &profile, const QString &path)
 {
-    if (profile.placeholders.contains(path)) {
+    if (profile.placeholderPaths.contains(path)) {
         return i18n("Remote-only placeholder");
     }
     for (const QString &signature : profile.localSignatures) {
@@ -134,14 +77,14 @@ public:
             return {};
         }
 
-        const QList<MountedProfile> profiles = configuredProfiles();
-        const MountedProfile *matchedProfile = nullptr;
+        const QList<DriveBeaconMountState> profiles = driveBeaconMountStates();
+        const DriveBeaconMountState *matchedProfile = nullptr;
         QStringList paths;
-        for (const MountedProfile &profile : profiles) {
+        for (const DriveBeaconMountState &profile : profiles) {
             QStringList candidatePaths;
             bool matches = true;
             for (const KFileItem &item : items) {
-                const QString path = relativePath(profile.mountDirectory, item.url());
+                const QString path = driveBeaconRelativePath(profile.mountDirectory, item.url());
                 if (path.isEmpty()) {
                     matches = false;
                     break;
@@ -172,9 +115,9 @@ public:
         auto *keepLocal = new QAction(QIcon::fromTheme(QStringLiteral("emblem-synchronized")),
                                       i18n("DriveBeacon – Keep Local"), this);
         keepLocal->setToolTip(i18n("Keep selected content in the local cache using profile %1 (%2)")
-                                  .arg(matchedProfile->name, state));
+                                  .arg(matchedProfile->profileName, state));
         QObject::connect(keepLocal, &QAction::triggered, this,
-                         [this, profile = matchedProfile->name, paths] {
+                         [this, profile = matchedProfile->profileName, paths] {
                          if (!startDriveBeaconCtl(QStringLiteral("keep-local"), profile, paths)) {
                              Q_EMIT error(i18n("Could not start drivebeaconctl."));
                          }
@@ -184,9 +127,9 @@ public:
         auto *evict = new QAction(QIcon::fromTheme(QStringLiteral("drive-harddisk")),
                                   i18n("DriveBeacon – Release Local cache"), this);
         evict->setToolTip(i18n("Release cached content using profile %1 (%2)")
-                              .arg(matchedProfile->name, state));
+                              .arg(matchedProfile->profileName, state));
         QObject::connect(evict, &QAction::triggered, this,
-                         [this, profile = matchedProfile->name, paths] {
+                         [this, profile = matchedProfile->profileName, paths] {
                              if (!startDriveBeaconCtl(QStringLiteral("evict"), profile, paths)) {
                                  Q_EMIT error(i18n("Could not start drivebeaconctl."));
                              }

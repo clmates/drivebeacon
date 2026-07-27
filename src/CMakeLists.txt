@@ -101,7 +101,7 @@ target_link_libraries(drivebeacon-service PRIVATE
 # The provider delegates all state changes to drivebeaconctl, so credentials and
 # synchronization policy remain owned by the headless DriveBeacon service.
 kcoreaddons_add_plugin(drivebeacon_fileitemaction
-    SOURCES drivebeaconfileitemaction.cpp drivebeaconfileitemaction.json
+    SOURCES drivebeaconfileitemaction.cpp drivebeaconmountstate.h drivebeaconfileitemaction.json
     INSTALL_NAMESPACE "kf6/kfileitemaction"
 )
 target_compile_definitions(drivebeacon_fileitemaction PRIVATE
@@ -117,7 +117,7 @@ target_link_libraries(drivebeacon_fileitemaction PRIVATE
 # Dolphin asks overlay providers for lightweight visual state without opening
 # the selected file. This provider reads the persisted cache index only.
 kcoreaddons_add_plugin(drivebeacon_overlayicon
-    SOURCES drivebeaconoverlayicon.cpp
+    SOURCES drivebeaconoverlayicon.cpp drivebeaconmountstate.h
     INSTALL_NAMESPACE "kf6/overlayicon"
 )
 target_link_libraries(drivebeacon_overlayicon PRIVATE
