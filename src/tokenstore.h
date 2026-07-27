@@ -15,9 +15,6 @@ public:
     /** Writes only the refresh token and metadata; access tokens remain memory-only. */
     static bool save(const QString &profileName, const OAuthTokens &tokens,
                      QString *error = nullptr);
-    /** Removes credentials for a profile from the wallet. */
-    static bool remove(const QString &profileName, QString *error = nullptr);
-
     /** Stable JSON representation used inside the wallet and by deterministic tests. */
     static QByteArray serialize(const OAuthTokens &tokens);
     /** Parses the representation created by serialize(). */

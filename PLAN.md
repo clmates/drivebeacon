@@ -163,7 +163,10 @@ Initial cleanup completed: the unreachable Device Code implementation and its
 unused controller properties were removed; the unconsumed legacy service D-Bus
 methods were removed; and the AppStream/README descriptions now identify Graph
 and FUSE as the primary architecture while documenting abraunegg as optional
-compatibility. The remaining API and parsing review is still pending.
+compatibility. The unused `TokenStore::remove()` helper was also removed because
+profile deletion is not implemented yet; credential cleanup will be introduced
+with that complete local-only deletion workflow. The remaining API and parsing
+review is still pending.
 
 ## Pending points from the previous plan
 

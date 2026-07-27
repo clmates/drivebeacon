@@ -100,18 +100,3 @@ bool TokenStore::save(const QString &profileName, const OAuthTokens &tokens, QSt
     }
     return saved;
 }
-
-bool TokenStore::remove(const QString &profileName, QString *error)
-{
-    if (profileName.trimmed().isEmpty()) {
-        return false;
-    }
-    auto *wallet = openWallet(error);
-    if (!wallet) {
-        return false;
-    }
-    const bool removed = !wallet->hasEntry(entryName(profileName))
-        || wallet->removeEntry(entryName(profileName)) == 0;
-    delete wallet;
-    return removed;
-}
