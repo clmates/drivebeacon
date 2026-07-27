@@ -667,33 +667,6 @@ void OneDriveController::setGraphSyncEnabled(bool enabled)
     Q_EMIT graphSyncChanged();
 }
 
-void OneDriveController::setAvailability(const QString &availability)
-{
-    const QString normalized = availability.trimmed().toLower();
-    if (normalized != QLatin1String("keep-local")
-        && normalized != QLatin1String("remote-only")
-        && normalized != QLatin1String("on-demand")) {
-        setJournalError(QStringLiteral("Unknown availability policy: %1").arg(availability));
-        return;
-    }
-    const LocalAvailability next = localAvailabilityFromName(normalized);
-    if (next == m_profile.availability) {
-        return;
-    }
-    m_profile.availability = next;
-    m_profileStore.save(m_profile);
-    m_graphClient.setLocalAvailability(next);
-    Q_EMIT profileChanged();
-    if (m_profile.backend != SyncBackend::MicrosoftGraph || !m_graphSyncEnabled) {
-        return;
-    }
-    m_graphClient.stopMonitoring();
-    // Keep the existing cursor and baseline when possible. Switching from
-    // RemoteOnly to KeepLocal naturally materializes missing content when the
-    // local signature baseline no longer proves the files are present.
-    setGraphSyncEnabled(true);
-}
-
 void OneDriveController::materializeGraphFile(const QString &relativePath)
 {
     if (m_profile.backend != SyncBackend::MicrosoftGraph || !graphAuthenticated()

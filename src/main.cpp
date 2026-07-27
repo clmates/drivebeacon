@@ -10,7 +10,6 @@
 #include <KStatusNotifierItem>
 
 #include <QAction>
-#include <QActionGroup>
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QCoreApplication>
@@ -282,13 +281,9 @@ int main(int argc, char *argv[])
         QAction *local = nullptr;
         QAction *remote = nullptr;
         QAction *toggleSync = nullptr;
-        QAction *keepLocal = nullptr;
-        QAction *remoteOnly = nullptr;
-        QAction *onDemand = nullptr;
         QAction *mount = nullptr;
         QAction *resync = nullptr;
         QAction *primary = nullptr;
-        QActionGroup *availabilityGroup = nullptr;
     };
     QHash<QString, AccountMenuItems> accountMenus;
     QAction *accountsStatus = accountsMenu->addAction(i18n("Service unavailable"));
@@ -314,21 +309,6 @@ int main(int argc, char *argv[])
                 items.local = items.menu->addAction(QString());
                 items.remote = items.menu->addAction(QString());
                 items.toggleSync = items.menu->addAction(QString());
-                items.availabilityGroup = new QActionGroup(items.menu);
-                items.availabilityGroup->setExclusive(true);
-                auto addAvailabilityAction = [&](const QString &value) {
-                    QAction *action = items.menu->addAction(QString());
-                    action->setCheckable(true);
-                    items.availabilityGroup->addAction(action);
-                    QObject::connect(action, &QAction::triggered, &application,
-                                     [&serviceClient, profile, value] {
-                                         serviceClient.setProfileAvailability(profile, value);
-                                     });
-                    return action;
-                };
-                items.keepLocal = addAvailabilityAction(QStringLiteral("keep-local"));
-                items.remoteOnly = addAvailabilityAction(QStringLiteral("remote-only"));
-                items.onDemand = addAvailabilityAction(QStringLiteral("on-demand"));
                 items.mount = items.menu->addAction(QString());
                 items.resync = items.menu->addAction(i18n("Force remote resync"));
                 items.primary = items.menu->addAction(QString());
@@ -360,7 +340,6 @@ int main(int argc, char *argv[])
             const bool loaded = !status.isEmpty();
             const bool authenticated = status.value(QStringLiteral("authenticated")).toBool();
             const bool syncEnabled = status.value(QStringLiteral("syncEnabled")).toBool();
-            const QString availability = status.value(QStringLiteral("availability")).toString();
             items.menu->setEnabled(loaded);
             items.connection->setText(loaded
                                           ? (authenticated ? i18n("Connected") : i18n("Not connected"))
@@ -375,17 +354,10 @@ int main(int argc, char *argv[])
                                        formatBytes(status.value(QStringLiteral("quotaRemaining")).toLongLong()),
                                        formatBytes(status.value(QStringLiteral("quotaTotal")).toLongLong())));
             items.toggleSync->setText(syncEnabled ? i18n("Pause account") : i18n("Resume account"));
-            items.keepLocal->setText(i18n("Keep local"));
-            items.remoteOnly->setText(i18n("Remote only"));
-            items.onDemand->setText(i18n("Download on demand"));
             const bool mounted = status.value(QStringLiteral("mounted")).toBool();
             items.mount->setText(mounted ? i18n("Unmount FUSE view") : i18n("Mount FUSE view"));
-            items.keepLocal->setChecked(availability == QLatin1String("keep-local"));
-            items.remoteOnly->setChecked(availability == QLatin1String("remote-only"));
-            items.onDemand->setChecked(availability == QLatin1String("on-demand"));
             items.toggleSync->setEnabled(loaded);
-            items.resync->setEnabled(loaded && authenticated && syncEnabled
-                                     && availability == QLatin1String("keep-local"));
+            items.resync->setEnabled(loaded && authenticated && syncEnabled);
             items.mount->setEnabled(loaded && authenticated);
             items.primary->setText(profile == serviceClient.primaryProfileName()
                                         ? i18n("Primary account") : i18n("Use as primary account"));
@@ -446,9 +418,7 @@ int main(int argc, char *argv[])
         graphSyncAction->setEnabled(!serviceControl && authenticated);
         forceRemoteResyncAction->setEnabled(serviceClient.available()
                                              && !serviceClient.primaryProfileName().isEmpty()
-                                             && authenticated && serviceClient.graphSyncEnabled()
-                                             && primaryStatus.value(QStringLiteral("availability"))
-                                                    .toString() == QLatin1String("keep-local"));
+                                             && authenticated && serviceClient.graphSyncEnabled());
         const bool serviceAvailable = serviceClient.available() && graphService;
         pauseProfileAction->setText(serviceClient.graphSyncEnabled()
                                          ? i18n("Pause current account")

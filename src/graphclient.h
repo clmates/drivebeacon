@@ -291,11 +291,11 @@ private:
     /** Indicates that one or more uploads are active. */
     bool m_uploadInProgress = false;
     /** True when the profile-wide fallback automatically materializes content. */
-    bool m_materializeFiles = true;
+    // Profile-wide materialization is disabled; KeepLocal is evaluated per path.
+    bool m_materializeFiles = false;
     /** Whether the profile-wide fallback owns placeholders and cache eviction. */
-    bool m_remoteOnlyMode = false;
     /** Profile-wide fallback used when no path override matches. */
-    LocalAvailability m_defaultAvailability = LocalAvailability::KeepLocal;
+    LocalAvailability m_defaultAvailability = LocalAvailability::OnDemand;
     /** True while the current local-change batch still has queued work. */
     bool m_uploadBatchActive = false;
     bool m_deleteInProgress = false;

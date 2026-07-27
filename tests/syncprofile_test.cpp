@@ -21,6 +21,7 @@ private Q_SLOTS:
     void parsesGraphQuota();
     void marksMissingQuotaValuesUnknown();
     void storesProfilesIndependently();
+    void normalizesLegacyProfileAvailability();
     void storesIndividualAndGlobalSyncState();
 
 private:
@@ -149,6 +150,19 @@ void SyncProfileTest::storesIndividualAndGlobalSyncState()
     // Global pause is independent from the per-profile switch and must not
     // rewrite the profile's own state or its persisted synchronization data.
     QCOMPARE(store.load(profile.name).syncEnabled, false);
+}
+
+void SyncProfileTest::normalizesLegacyProfileAvailability()
+{
+    ProfileStore store;
+    SyncProfile legacy;
+    legacy.name = QStringLiteral("legacy-availability");
+    legacy.availability = LocalAvailability::KeepLocal;
+    store.save(legacy);
+
+    // The persisted compatibility key is deliberately normalized so a legacy
+    // profile cannot reactivate whole-profile materialization on restart.
+    QCOMPARE(store.load(legacy.name).availability, LocalAvailability::OnDemand);
 }
 
 QTEST_MAIN(SyncProfileTest)

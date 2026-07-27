@@ -58,8 +58,6 @@ public Q_SLOTS:
     void refreshGraphFolders();
     /** Pauses or resumes one named profile through the service. */
     void setProfileSyncEnabled(const QString &profileName, bool enabled);
-    /** Changes one named profile's local availability through the service. */
-    void setProfileAvailability(const QString &profileName, const QString &availability);
     /** Releases one cached file or folder without changing remote content. */
     void evictPath(const QString &profileName, const QString &relativePath);
     /** Pauses or resumes all profiles through the service. */

@@ -147,12 +147,6 @@ void DriveBeaconServiceClient::setProfileSyncEnabled(const QString &profileName,
     call(QStringLiteral("setProfileSyncEnabled"), {profileName, enabled});
 }
 
-void DriveBeaconServiceClient::setProfileAvailability(const QString &profileName,
-                                                      const QString &availability)
-{
-    call(QStringLiteral("setProfileAvailability"), {profileName, availability});
-}
-
 void DriveBeaconServiceClient::evictPath(const QString &profileName,
                                          const QString &relativePath)
 {

@@ -136,8 +136,6 @@ public:
     Q_INVOKABLE void refreshGraphFolders();
     /** Enables or pauses this profile while retaining all synchronization state. */
     Q_INVOKABLE void setGraphSyncEnabled(bool enabled);
-    /** Changes local materialization policy without discarding sync baselines. */
-    Q_INVOKABLE void setAvailability(const QString &availability);
     /** Materializes one file or all files below a selected folder. */
     Q_INVOKABLE void materializeGraphFile(const QString &relativePath);
     /** Releases one cached file or folder without changing remote content. */

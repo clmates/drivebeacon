@@ -56,9 +56,9 @@ SyncProfile ProfileStore::load(const QString &requestedName) const
     // configurable, so an upgrade never silently changes the visible path.
     profile.mountDirectory = settings.value(
         QStringLiteral("mountDirectory"), profile.localDirectory).toString();
-    profile.availability = localAvailabilityFromName(
-        settings.value(QStringLiteral("availability"), localAvailabilityName(profile.availability))
-            .toString());
+    // Historical profiles stored KeepLocal or RemoteOnly globally. Normalize
+    // them immediately: materialization now belongs to per-path policies.
+    profile.availability = LocalAvailability::OnDemand;
     // Missing values remain enabled for backward compatibility with existing
     // profiles created before per-account pause state was introduced.
     profile.syncEnabled = settings.value(QStringLiteral("syncEnabled"), true).toBool();
@@ -109,7 +109,8 @@ void ProfileStore::save(const SyncProfile &profile)
     settings.setValue(QStringLiteral("remoteDriveId"), profile.remoteDriveId);
     settings.setValue(QStringLiteral("localDirectory"), profile.localDirectory);
     settings.setValue(QStringLiteral("mountDirectory"), profile.mountDirectory);
-    settings.setValue(QStringLiteral("availability"), localAvailabilityName(profile.availability));
+    // Keep the key for older clients, but never persist a profile-wide mode.
+    settings.setValue(QStringLiteral("availability"), QStringLiteral("on-demand"));
     settings.setValue(QStringLiteral("syncEnabled"), profile.syncEnabled);
     settings.setValue(QStringLiteral("remoteCheckIntervalSeconds"),
                       qBound(10, profile.remoteCheckIntervalSeconds, 3600));

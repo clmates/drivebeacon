@@ -240,13 +240,9 @@ GraphClient::GraphClient(QObject *parent)
                     if (!oldPath.isEmpty() && isIncluded(oldPath)) {
                         log(QStringLiteral("Graph sync: removing remotely deleted %1").arg(oldPath));
                         const QString localPath = safeLocalPath(oldPath);
-                        if (m_materializeFiles) {
-                            if (item.contains(QStringLiteral("file")) || !QFileInfo(localPath).isDir()) {
-                                QFile::remove(localPath);
-                            } else {
-                                QDir().rmdir(localPath);
-                            }
-                        } else if (m_placeholderPaths.contains(oldPath)) {
+                        if (QFileInfo(localPath).isDir()) {
+                            QDir().rmdir(localPath);
+                        } else {
                             QFile::remove(localPath);
                         }
                         m_placeholderPaths.remove(oldPath);
@@ -362,29 +358,25 @@ GraphClient::GraphClient(QObject *parent)
                     continue;
                 }
                 if (!oldPath.isEmpty() && oldPath != renamedPath) {
-                    if (m_materializeFiles) {
-                        const QString oldLocalPath = safeLocalPath(oldPath);
-                        const QString newLocalPath = safeLocalPath(renamedPath);
-                        if (QFileInfo(oldLocalPath).exists() && !QFileInfo(newLocalPath).exists()) {
-                            QDir().mkpath(QFileInfo(newLocalPath).absolutePath());
-                            if (!QFile::rename(oldLocalPath, newLocalPath)) {
-                                Q_EMIT errorOccurred(QStringLiteral("Could not apply remote rename: %1 → %2")
-                                                         .arg(oldPath, renamedPath));
-                                continue;
-                            }
-                            log(QStringLiteral("Graph sync: renamed local %1 → %2")
-                                    .arg(oldPath, renamedPath));
-                            const QString signature = m_localSignatures.take(oldPath);
-                            if (!signature.isEmpty()) {
-                                m_localSignatures.insert(renamedPath, signature);
-                            }
-                            if (m_localMetadata.contains(oldPath)) {
-                                m_localMetadata.insert(renamedPath, m_localMetadata.take(oldPath));
-                            }
+                    const QString oldLocalPath = safeLocalPath(oldPath);
+                    const QString newLocalPath = safeLocalPath(renamedPath);
+                    if (QFileInfo(oldLocalPath).exists() && !m_placeholderPaths.contains(oldPath)) {
+                        QDir().mkpath(QFileInfo(newLocalPath).absolutePath());
+                        if (!QFile::rename(oldLocalPath, newLocalPath)) {
+                            Q_EMIT errorOccurred(QStringLiteral("Could not apply remote rename: %1 → %2")
+                                                     .arg(oldPath, renamedPath));
+                            continue;
+                        }
+                        log(QStringLiteral("Graph sync: renamed local %1 → %2")
+                                .arg(oldPath, renamedPath));
+                        const QString signature = m_localSignatures.take(oldPath);
+                        if (!signature.isEmpty()) {
+                            m_localSignatures.insert(renamedPath, signature);
+                        }
+                        if (m_localMetadata.contains(oldPath)) {
+                            m_localMetadata.insert(renamedPath, m_localMetadata.take(oldPath));
                         }
                     } else if (m_placeholderPaths.contains(oldPath)) {
-                        const QString oldLocalPath = safeLocalPath(oldPath);
-                        const QString newLocalPath = safeLocalPath(renamedPath);
                         QDir().mkpath(QFileInfo(newLocalPath).absolutePath());
                         if (QFile::rename(oldLocalPath, newLocalPath)) {
                             m_placeholderPaths.remove(oldPath);
@@ -403,7 +395,9 @@ GraphClient::GraphClient(QObject *parent)
                 m_remotePathsById.insert(itemId, relativePath);
                 m_remoteItemIds.insert(relativePath, itemId);
                 m_remoteEtags.insert(itemId, eTag);
-                if (m_materializeFiles && isIncluded(relativePath)
+                if ((shouldMaterializePath(relativePath)
+                     || m_requestedMaterializations.contains(relativePath))
+                    && isIncluded(relativePath)
                     && !isRemoteFolderPath(relativePath)) {
                     m_pendingFiles.enqueue({itemId, relativePath,
                                             item.value(QStringLiteral("size")).toVariant().toLongLong()});
@@ -414,7 +408,7 @@ GraphClient::GraphClient(QObject *parent)
                 log(QStringLiteral("Graph sync: remote folder structure changed; refreshing selected tree"));
                 synchronize(m_deltaDriveId, m_deltaToken, m_syncDirectory,
                             m_includedFolders, m_excludedFolders);
-            } else if (!m_pendingFiles.isEmpty() && m_materializeFiles) {
+            } else if (!m_pendingFiles.isEmpty()) {
                 log(QStringLiteral("Graph sync: downloading %1 changed remote file(s)")
                              .arg(m_pendingFiles.size()));
                 m_totalFiles = m_pendingFiles.size();
@@ -503,32 +497,12 @@ void GraphClient::configureTransferConcurrency(int downloads, int uploads, int l
 
 void GraphClient::setLocalAvailability(LocalAvailability availability)
 {
-    m_defaultAvailability = availability;
-    const bool materializeFiles = availability == LocalAvailability::KeepLocal;
-    const bool remoteOnly = availability == LocalAvailability::RemoteOnly;
-    m_remoteOnlyMode = remoteOnly;
-    if (m_materializeFiles && !materializeFiles) {
-        // Flip the guard before any cleanup so a timer callback cannot observe
-        // the evicted files and enqueue remote deletions during this switch.
-        m_materializeFiles = false;
-        if (m_activeDeleteReply) {
-            m_activeDeleteReply->abort();
-        }
-        // A local-only operation queued before a non-materialized policy must
-        // not leak into the remote drive after the policy transition.
-        m_pendingUploads.clear();
-        m_pendingRemoteDeletes.clear();
-        m_pendingRemoteRenames.clear();
-        m_pendingRemoteDeletePaths.clear();
-        m_uploadBatchActive = false;
-        // Only RemoteOnly promises that local content is absent. OnDemand
-        // keeps an existing cache and lets FUSE fetch missing files explicitly.
-        if (m_remoteOnlyMode) {
-            evictMaterializedFiles();
-        }
-        return;
-    }
-    m_materializeFiles = materializeFiles;
+    Q_UNUSED(availability);
+    // Profile-wide KeepLocal/RemoteOnly is retained only for reading old
+    // configuration. Never evict or enqueue the whole profile here: those
+    // decisions now come from the inherited path policy for each item.
+    m_defaultAvailability = LocalAvailability::OnDemand;
+    m_materializeFiles = false;
 }
 
 void GraphClient::setPathPolicies(const QStringList &policies)
@@ -712,11 +686,6 @@ void GraphClient::initializeLocalMonitoring(const QStringList &signatures,
                 break;
             }
         }
-    }
-    if (m_remoteOnlyMode) {
-        // Also enforce RemoteOnly after a restart, once the persisted local
-        // signatures have been loaded into memory.
-        evictMaterializedFiles();
     }
     if (m_monitoringEnabled) {
         m_uploadTimer.start();
@@ -919,8 +888,8 @@ void GraphClient::queueMaterialization(const QString &normalized, const QString 
     if (QFileInfo(localPath).isFile() && !m_placeholderPaths.contains(normalized)) {
         return;
     }
-    // The request is kept separate from the availability policy: RemoteOnly
-    // still avoids normal downloads, but a FUSE read is an explicit exception.
+    // The request is kept separate from the inherited policy: Release Local
+    // Cache avoids normal downloads, but a FUSE read is an explicit exception.
     m_requestedMaterializations.insert(normalized);
     bool queued = false;
     for (const GraphSyncFile &file : std::as_const(m_pendingFiles)) {

@@ -354,15 +354,6 @@ void DriveBeaconService::setProfileSyncEnabled(const QString &profileName, bool 
     }
 }
 
-void DriveBeaconService::setProfileAvailability(const QString &profileName,
-                                                const QString &availability)
-{
-    if (auto *controller = m_controllers.value(profileName.trimmed(), nullptr)) {
-        controller->setAvailability(availability);
-        publishStatus();
-    }
-}
-
 void DriveBeaconService::setGlobalSyncEnabled(bool enabled)
 {
     m_profileStore.setGlobalSyncEnabled(enabled);

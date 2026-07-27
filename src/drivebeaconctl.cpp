@@ -165,8 +165,7 @@ int main(int argc, char *argv[])
         QStringLiteral("command"),
         QStringLiteral("status, sync, refresh-folders, reload-profiles, pause, resume, "
                        "pause-profile <name>, resume-profile <name>, or service "
-                       "<start|stop|restart>; set-availability <name> "
-                       "<keep-local|remote-only|on-demand>; mount <name>; "
+                       "<start|stop|restart>; mount <name>; "
                        "unmount <name>; materialize <name> <relative-path>; "
                        "keep-local <name> <relative-path>; "
                        "evict <name> <relative-path>"));
@@ -200,10 +199,6 @@ int main(int argc, char *argv[])
         && arguments.size() == 2) {
         return callServiceMethod(QStringLiteral("setProfileSyncEnabled"),
                                  {arguments.at(1), command == QStringLiteral("resume-profile")});
-    }
-    if (command == QStringLiteral("set-availability") && arguments.size() == 3) {
-        return callServiceMethod(QStringLiteral("setProfileAvailability"),
-                                 {arguments.at(1), arguments.at(2)});
     }
     if (command == QStringLiteral("mount") && arguments.size() == 2) {
         return mountProfile(arguments.at(1));

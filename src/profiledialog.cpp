@@ -36,7 +36,6 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     , m_nameEdit(new QLineEdit(this))
     , m_backendCombo(new QComboBox(this))
     , m_directoryEdit(new QLineEdit(this))
-    , m_availabilityCombo(new QComboBox(this))
     , m_syncEnabledCheck(new QCheckBox(i18n("Synchronize this account"), this))
     , m_globalSyncEnabledCheck(new QCheckBox(i18n("Synchronize all accounts"), this))
     , m_folderTree(new QTreeWidget(this))
@@ -68,10 +67,6 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
 
     m_backendCombo->addItem(i18n("abraunegg journal"), QStringLiteral("abraunegg-journal"));
     m_backendCombo->addItem(i18n("Microsoft Graph"), QStringLiteral("graph"));
-    // The profile default is intentionally on-demand. Materialization policy
-    // belongs to a folder or file so a global switch cannot evict an account
-    // unexpectedly; legacy values are still read but normalized on save.
-    m_availabilityCombo->addItem(i18n("Download on demand"), QStringLiteral("on-demand"));
     m_folderTree->setHeaderLabels({i18n("Remote folder"), i18n("Sync"), i18n("Exclude"),
                                    i18n("Folder policy")});
     m_folderTree->setRootIsDecorated(false);
@@ -134,7 +129,6 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     form->addRow(i18n("Profile name:"), m_nameEdit);
     form->addRow(i18n("Backend:"), m_backendCombo);
     form->addRow(i18n("FUSE mount directory:"), directoryRow);
-    form->addRow(i18n("Default availability:"), m_availabilityCombo);
     form->addRow(i18n("Account state:"), m_syncEnabledCheck);
     form->addRow(i18n("Global state:"), m_globalSyncEnabledCheck);
     form->addRow(i18n("Remote check interval:"), m_remoteIntervalSpin);
@@ -261,7 +255,6 @@ void ProfileDialog::loadProfile(const QString &name)
     m_nameEdit->setText(profile.name);
     m_backendCombo->setCurrentIndex(m_backendCombo->findData(syncBackendName(profile.backend)));
     m_directoryEdit->setText(profile.mountDirectory);
-    m_availabilityCombo->setCurrentIndex(0);
     m_syncEnabledCheck->setChecked(profile.syncEnabled);
     m_globalSyncEnabledCheck->setChecked(m_store->globalSyncEnabled());
     m_remoteIntervalSpin->setValue(profile.remoteCheckIntervalSeconds);
@@ -279,7 +272,6 @@ void ProfileDialog::createProfile()
     m_nameEdit->setText(QStringLiteral("graph-test"));
     m_backendCombo->setCurrentIndex(m_backendCombo->findData(QStringLiteral("graph")));
     m_directoryEdit->setText(QDir::home().filePath(QStringLiteral("Onedrive-Graph-Test")));
-    m_availabilityCombo->setCurrentIndex(0);
     m_syncEnabledCheck->setChecked(true);
     m_globalSyncEnabledCheck->setChecked(m_store->globalSyncEnabled());
     m_concurrentDownloadsSpin->setValue(2);
@@ -430,7 +422,7 @@ void ProfileDialog::populateRemoteFolders()
         policy->addItem(i18n("Inherit default"), QStringLiteral("inherit"));
         policy->addItem(i18n("Keep local"), QStringLiteral("keep-local"));
         policy->addItem(i18n("On demand"), QStringLiteral("on-demand"));
-        policy->addItem(i18n("Keep remote"), QStringLiteral("remote-only"));
+        policy->addItem(i18n("Release local cache"), QStringLiteral("remote-only"));
         const QString prefix = folder + QLatin1Char('\t');
         for (const QString &record : pathPolicies) {
             if (record.startsWith(prefix)) {

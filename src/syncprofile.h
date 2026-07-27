@@ -34,8 +34,8 @@ struct SyncProfile {
     QString localDirectory;
     /** User-visible FUSE mount path; content is stored separately in the cache. */
     QString mountDirectory;
-    /** Whether Graph content is materialized locally. */
-    LocalAvailability availability = LocalAvailability::KeepLocal;
+    /** Profile-wide mode; always OnDemand. Item policies control materialization. */
+    LocalAvailability availability = LocalAvailability::OnDemand;
     /** Whether this profile is allowed to perform Graph synchronization work. */
     bool syncEnabled = true;
     /** Polling period for Graph delta requests, clamped to 10..3600 seconds. */
