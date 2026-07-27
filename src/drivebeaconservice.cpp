@@ -386,27 +386,6 @@ void DriveBeaconService::setPrimaryProfile(const QString &profileName)
     Q_EMIT statusChanged();
 }
 
-void DriveBeaconService::startLegacyService()
-{
-    if (auto *controller = activeController()) {
-        controller->startService();
-    }
-}
-
-void DriveBeaconService::stopLegacyService()
-{
-    if (auto *controller = activeController()) {
-        controller->stopService();
-    }
-}
-
-void DriveBeaconService::restartLegacyService()
-{
-    if (auto *controller = activeController()) {
-        controller->restartService();
-    }
-}
-
 void DriveBeaconService::publishStatus()
 {
     Q_EMIT statusChanged();

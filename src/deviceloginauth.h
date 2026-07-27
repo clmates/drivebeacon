@@ -5,7 +5,6 @@
 #include <QNetworkAccessManager>
 #include <QObject>
 #include <QTcpServer>
-#include <QTimer>
 
 /** OAuth tokens returned by the Microsoft identity platform. */
 struct OAuthTokens {
@@ -38,8 +37,6 @@ public:
     void cancel();
 
 Q_SIGNALS:
-    /** Requests that the UI show this URL and code to the user. */
-    void userActionRequired(const QUrl &verificationUri, const QString &userCode);
     /** Requests that the UI open this browser authorization URL. */
     void browserAuthorizationRequired(const QUrl &authorizationUrl);
     /** Emitted when Microsoft returns usable access and refresh tokens. */
@@ -48,10 +45,6 @@ Q_SIGNALS:
     void errorOccurred(const QString &message);
 
 private:
-    /** Requests a device-code session when browser redirect mode is unavailable. */
-    void requestDeviceCode(const QString &clientId);
-    /** Polls Microsoft until the device-code flow completes or expires. */
-    void pollToken(const QString &clientId, const QString &deviceCode, int intervalSeconds);
     /** Exchanges the PKCE authorization code for Graph tokens. */
     void exchangeAuthorizationCode(const QString &code);
     /** Exchanges a wallet-backed refresh token for a new access token. */
@@ -63,14 +56,11 @@ private:
 
     QNetworkAccessManager m_network;
     QTcpServer m_callbackServer;
-    QTimer m_pollTimer;
-    /** Ephemeral OAuth session state; credentials are never written here. */
+    /** Ephemeral PKCE session state; credentials are never written here. */
     QString m_clientId;
-    QString m_deviceCode;
     QString m_refreshTokenForRenewal;
     QString m_redirectUri = QStringLiteral(
         "https://login.microsoftonline.com/common/oauth2/nativeclient");
     QString m_state;
     QString m_codeVerifier;
-    int m_pollIntervalSeconds = 5;
 };

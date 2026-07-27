@@ -80,12 +80,6 @@ OneDriveController::OneDriveController(const QString &profileName,
                     m_activities.prepend(std::move(*event));
                 }
             });
-    connect(&m_graphAuth, &DeviceLoginAuth::userActionRequired, this,
-            [this](const QUrl &verificationUri, const QString &userCode) {
-                m_graphVerificationUri = verificationUri.toString();
-                m_graphUserCode = userCode;
-                Q_EMIT graphAuthChanged();
-            });
     connect(&m_graphAuth, &DeviceLoginAuth::browserAuthorizationRequired, this,
             [this](const QUrl &authorizationUrl) {
                 m_graphAuthorizationUrl = authorizationUrl.toString(QUrl::FullyEncoded);
@@ -101,8 +95,6 @@ OneDriveController::OneDriveController(const QString &profileName,
                     m_graphErrorMessage = walletError;
                 }
                 m_graphAuthorizationUrl.clear();
-                m_graphVerificationUri.clear();
-                m_graphUserCode.clear();
                 Q_EMIT graphAuthChanged();
                 if (m_profile.remoteDriveId.isEmpty()) {
                     m_graphClient.fetchCurrentDrive(m_graphTokens.accessToken);
@@ -121,8 +113,6 @@ OneDriveController::OneDriveController(const QString &profileName,
                 m_graphClient.stopMonitoring();
                 m_graphAuthorizationUrl.clear();
                 setJournalError(message);
-                m_graphVerificationUri.clear();
-                m_graphUserCode.clear();
                 Q_EMIT graphAuthChanged();
             });
     connect(&m_graphClient, &GraphClient::quotaReceived, this,
@@ -447,16 +437,6 @@ bool OneDriveController::graphAuthenticated() const
     return !m_graphTokens.accessToken.isEmpty();
 }
 
-QString OneDriveController::graphVerificationUri() const
-{
-    return m_graphVerificationUri;
-}
-
-QString OneDriveController::graphUserCode() const
-{
-    return m_graphUserCode;
-}
-
 QString OneDriveController::graphErrorMessage() const
 {
     return m_graphErrorMessage;
@@ -570,8 +550,6 @@ void OneDriveController::beginGraphLogin(const QString &clientId)
 void OneDriveController::cancelGraphLogin()
 {
     m_graphAuth.cancel();
-    m_graphVerificationUri.clear();
-    m_graphUserCode.clear();
     m_graphErrorMessage.clear();
     m_graphAuthorizationUrl.clear();
     Q_EMIT graphAuthChanged();

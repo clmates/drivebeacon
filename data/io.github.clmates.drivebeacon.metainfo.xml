@@ -12,12 +12,14 @@
 
   <description>
     <p>
-      DriveBeacon is a system tray interface for the abraunegg OneDrive client.
-      It shows recent transfers and controls the existing systemd user service.
+      DriveBeacon is a KDE system tray client and headless service for Microsoft
+      Graph OneDrive synchronization. It supports multiple accounts, on-demand
+      materialization, a FUSE view, and optional legacy abraunegg migration.
     </p>
     <p xml:lang="es">
-      DriveBeacon es una interfaz de bandeja para el cliente OneDrive de abraunegg.
-      Muestra las transferencias recientes y controla el servicio de usuario de systemd existente.
+      DriveBeacon es un cliente de bandeja de KDE y un servicio sin interfaz para
+      sincronizar OneDrive mediante Microsoft Graph. Admite varias cuentas,
+      materialización bajo demanda, una vista FUSE y la migración opcional desde abraunegg.
     </p>
   </description>
 

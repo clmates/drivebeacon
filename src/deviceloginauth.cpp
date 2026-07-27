@@ -24,8 +24,6 @@ QNetworkRequest tokenRequest()
     return request;
 }
 
-const QUrl deviceCodeUrl(QStringLiteral(
-    "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode"));
 const QUrl tokenUrl(QStringLiteral(
     "https://login.microsoftonline.com/common/oauth2/v2.0/token"));
 const QUrl authorizeUrl(QStringLiteral(
@@ -37,11 +35,7 @@ DeviceLoginAuth::DeviceLoginAuth(QObject *parent)
     : QObject(parent)
     , m_network(this)
     , m_callbackServer(this)
-    , m_pollTimer(this)
 {
-    connect(&m_pollTimer, &QTimer::timeout, this, [this] {
-        pollToken(m_clientId, m_deviceCode, m_pollIntervalSeconds);
-    });
     connect(&m_callbackServer, &QTcpServer::newConnection, this,
             &DeviceLoginAuth::handleCallback);
 }
@@ -193,9 +187,7 @@ void DeviceLoginAuth::processTokenReply(QNetworkReply *reply)
 
 void DeviceLoginAuth::cancel()
 {
-    m_pollTimer.stop();
     m_callbackServer.close();
-    m_deviceCode.clear();
     m_refreshTokenForRenewal.clear();
     m_state.clear();
     m_codeVerifier.clear();
@@ -244,99 +236,4 @@ void DeviceLoginAuth::handleCallback()
             exchangeAuthorizationCode(code);
         });
     }
-}
-
-void DeviceLoginAuth::requestDeviceCode(const QString &clientId)
-{
-    QNetworkRequest request = tokenRequest();
-    request.setUrl(deviceCodeUrl);
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("client_id"), clientId);
-    query.addQueryItem(QStringLiteral("scope"), scopes);
-
-    auto *reply = m_network.post(request, query.query(QUrl::FullyEncoded).toUtf8());
-    connect(reply, &QNetworkReply::finished, this, [this, reply, clientId] {
-        const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
-        QJsonParseError parseError;
-        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll(), &parseError);
-        if (reply->error() != QNetworkReply::NoError || parseError.error != QJsonParseError::NoError
-            || !document.isObject()) {
-            Q_EMIT errorOccurred(reply->error() == QNetworkReply::NoError
-                                     ? QStringLiteral("Microsoft returned invalid device-code JSON.")
-                                     : reply->errorString());
-            return;
-        }
-
-        const QJsonObject object = document.object();
-        m_deviceCode = object.value(QStringLiteral("device_code")).toString();
-        const QUrl verificationUri(object.value(QStringLiteral("verification_uri"))
-                                        .toString());
-        const QString userCode = object.value(QStringLiteral("user_code")).toString();
-        if (m_deviceCode.isEmpty() || !verificationUri.isValid() || userCode.isEmpty()) {
-            Q_EMIT errorOccurred(QStringLiteral("Microsoft returned an incomplete device-code response."));
-            return;
-        }
-
-        m_pollIntervalSeconds = qMax(5, object.value(QStringLiteral("interval")).toInt(5));
-        Q_EMIT userActionRequired(verificationUri, userCode);
-        pollToken(clientId, m_deviceCode, m_pollIntervalSeconds);
-    });
-}
-
-void DeviceLoginAuth::pollToken(const QString &clientId, const QString &deviceCode,
-                                int intervalSeconds)
-{
-    if (deviceCode.isEmpty()) {
-        return;
-    }
-
-    QNetworkRequest request = tokenRequest();
-    request.setUrl(tokenUrl);
-    QUrlQuery query;
-    query.addQueryItem(QStringLiteral("grant_type"),
-                       QStringLiteral("urn:ietf:params:oauth:grant-type:device_code"));
-    query.addQueryItem(QStringLiteral("client_id"), clientId);
-    query.addQueryItem(QStringLiteral("device_code"), deviceCode);
-
-    auto *reply = m_network.post(request, query.query(QUrl::FullyEncoded).toUtf8());
-    connect(reply, &QNetworkReply::finished, this, [this, reply, intervalSeconds] {
-        const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
-        QJsonParseError parseError;
-        const QJsonDocument document = QJsonDocument::fromJson(reply->readAll(), &parseError);
-        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
-            Q_EMIT errorOccurred(reply->errorString().isEmpty()
-                                     ? QStringLiteral("Microsoft returned invalid token JSON.")
-                                     : reply->errorString());
-            return;
-        }
-
-        const QJsonObject object = document.object();
-        const QString error = object.value(QStringLiteral("error")).toString();
-        if (error == QLatin1String("authorization_pending")) {
-            m_pollTimer.start(intervalSeconds * 1000);
-            return;
-        }
-        if (error == QLatin1String("slow_down")) {
-            m_pollTimer.start((intervalSeconds + 5) * 1000);
-            return;
-        }
-        if (!error.isEmpty()) {
-            cancel();
-            Q_EMIT errorOccurred(object.value(QStringLiteral("error_description"))
-                                     .toString(error));
-            return;
-        }
-
-        OAuthTokens tokens;
-        tokens.accessToken = object.value(QStringLiteral("access_token")).toString();
-        tokens.refreshToken = object.value(QStringLiteral("refresh_token")).toString();
-        tokens.expiresInSeconds = object.value(QStringLiteral("expires_in")).toInt();
-        if (tokens.accessToken.isEmpty()) {
-            cancel();
-            Q_EMIT errorOccurred(QStringLiteral("Microsoft returned no access token."));
-            return;
-        }
-        cancel();
-        Q_EMIT authenticated(tokens);
-    });
 }

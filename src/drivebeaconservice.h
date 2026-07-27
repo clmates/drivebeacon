@@ -81,11 +81,6 @@ public Q_SLOTS:
     void mountProfile(const QString &profileName);
     /** Unmounts one profile without changing synchronization or remote state. */
     void unmountProfile(const QString &profileName);
-    /** Controls the legacy onedrive.service through the existing manager. */
-    void startLegacyService();
-    void stopLegacyService();
-    void restartLegacyService();
-
 Q_SIGNALS:
     /** Emitted when status, progress, or authentication changes. */
     void statusChanged();

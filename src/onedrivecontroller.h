@@ -34,8 +34,6 @@ class OneDriveController final : public QObject
     Q_PROPERTY(QDateTime remoteQuotaUpdatedAt READ remoteQuotaUpdatedAt NOTIFY remoteQuotaChanged)
     Q_PROPERTY(bool remoteQuotaStale READ remoteQuotaStale NOTIFY remoteQuotaChanged)
     Q_PROPERTY(bool graphAuthenticated READ graphAuthenticated NOTIFY graphAuthChanged)
-    Q_PROPERTY(QString graphVerificationUri READ graphVerificationUri NOTIFY graphAuthChanged)
-    Q_PROPERTY(QString graphUserCode READ graphUserCode NOTIFY graphAuthChanged)
     Q_PROPERTY(QString graphErrorMessage READ graphErrorMessage NOTIFY graphAuthChanged)
     Q_PROPERTY(QString graphAuthorizationUrl READ graphAuthorizationUrl NOTIFY graphAuthChanged)
     Q_PROPERTY(QString graphSyncStatus READ graphSyncStatus NOTIFY graphSyncChanged)
@@ -93,10 +91,6 @@ public:
     [[nodiscard]] bool serviceControlAvailable() const;
     /** Returns whether a Graph access token is currently held in memory. */
     [[nodiscard]] bool graphAuthenticated() const;
-    /** Returns the legacy Device Code URL, if a provider supplies one. */
-    [[nodiscard]] QString graphVerificationUri() const;
-    /** Returns the legacy Device Code user code, if a provider supplies one. */
-    [[nodiscard]] QString graphUserCode() const;
     /** Returns the last Graph authentication error shown in the profile dialog. */
     [[nodiscard]] QString graphErrorMessage() const;
     /** Returns the browser URL for the current interactive OAuth request. */
@@ -195,8 +189,6 @@ private:
     QString m_journalError;
     StorageQuota m_remoteQuota;
     OAuthTokens m_graphTokens;
-    QString m_graphVerificationUri;
-    QString m_graphUserCode;
     QString m_graphErrorMessage;
     QString m_graphAuthorizationUrl;
     QString m_graphSyncStatus = QStringLiteral("Idle");

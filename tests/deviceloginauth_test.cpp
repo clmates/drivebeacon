@@ -5,7 +5,7 @@
 #include <QSignalSpy>
 #include <QTest>
 
-/** Regression tests for safe, deterministic Device Code flow boundaries. */
+/** Regression tests for safe, deterministic browser OAuth boundaries. */
 class DeviceLoginAuthTest final : public QObject
 {
     Q_OBJECT
