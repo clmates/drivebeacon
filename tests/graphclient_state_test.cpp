@@ -18,6 +18,8 @@ private Q_SLOTS:
     void restoresPersistedRemoteSize();
     /** Baselines written by the short-lived three-field local format remain usable. */
     void acceptsLegacyLocalBaseline();
+    /** A KeepLocal folder policy must replace conflicting descendant policies. */
+    void parentKeepLocalClearsDescendantReleasePolicy();
 };
 
 void GraphClientStateTest::roundTripsSeparateBaselines()
@@ -61,6 +63,16 @@ void GraphClientStateTest::acceptsLegacyLocalBaseline()
                                      directory.path());
 
     QCOMPARE(client.localSignatures(), QStringList({QStringLiteral("Documentos/a.txt\thash-a")}));
+}
+
+void GraphClientStateTest::parentKeepLocalClearsDescendantReleasePolicy()
+{
+    GraphClient client;
+    client.setPathPolicies({QStringLiteral("Documentos/Videos\tremote-only")});
+
+    client.setPathPolicy(QStringLiteral("Documentos"), LocalAvailability::KeepLocal);
+
+    QCOMPARE(client.pathPolicies(), QStringList({QStringLiteral("Documentos\tkeep-local")}));
 }
 
 QTEST_MAIN(GraphClientStateTest)

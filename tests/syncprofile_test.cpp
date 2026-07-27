@@ -98,6 +98,11 @@ void SyncProfileTest::storesProfilesIndependently()
     graph.graphDeltaLink = QStringLiteral("https://graph.example/delta");
     graph.graphLocalSignatures = {QStringLiteral("a\tsha")};
     graph.graphRemotePaths = {QStringLiteral("id\tDocumentos/a.txt\te")};
+    graph.graphPlaceholderPaths = {QStringLiteral("Documentos/b.txt")};
+    graph.graphPathPolicies = {QStringLiteral("Documentos\tkeep-local"),
+                               QStringLiteral("Documentos/Videos\ton-demand")};
+    graph.includedFolders = {QStringLiteral("Documentos")};
+    graph.excludedFolders = {QStringLiteral("Imágenes")};
     graph.graphSyncedIncludedFolders = {QStringLiteral("Documentos")};
     store.save(graph);
     store.setActiveProfileName(graph.name);
@@ -115,6 +120,15 @@ void SyncProfileTest::storesProfilesIndependently()
     QCOMPARE(store.load().graphLocalSignatures, QStringList({QStringLiteral("a\tsha")}));
     QCOMPARE(store.load().graphRemotePaths,
              QStringList({QStringLiteral("id\tDocumentos/a.txt\te")}));
+    QCOMPARE(store.load().graphPlaceholderPaths,
+             QStringList({QStringLiteral("Documentos/b.txt")}));
+    QCOMPARE(store.load().graphPathPolicies,
+             QStringList({QStringLiteral("Documentos\tkeep-local"),
+                          QStringLiteral("Documentos/Videos\ton-demand")}));
+    QCOMPARE(store.load().includedFolders,
+             QStringList({QStringLiteral("Documentos")}));
+    QCOMPARE(store.load().excludedFolders,
+             QStringList({QStringLiteral("Imágenes")}));
     QCOMPARE(store.load().graphSyncedIncludedFolders,
              QStringList({QStringLiteral("Documentos")}));
 }

@@ -560,15 +560,14 @@ void GraphClient::setPathPolicy(const QString &relativePath, LocalAvailability a
         return;
     }
     const QString prefix = normalized + QLatin1Char('/');
-    if (availability != LocalAvailability::KeepLocal) {
-        // A released folder must not retain protected descendants that could
-        // silently re-materialize during a later local scan.
-        for (auto it = m_pathPolicies.begin(); it != m_pathPolicies.end();) {
-            if (it.key() == normalized || it.key().startsWith(prefix)) {
-                it = m_pathPolicies.erase(it);
-            } else {
-                ++it;
-            }
+    // A folder policy becomes the new inheritance boundary. Remove all
+    // descendant overrides so a later KeepLocal, OnDemand, or RemoteOnly
+    // decision cannot be shadowed by an older child policy.
+    for (auto it = m_pathPolicies.begin(); it != m_pathPolicies.end();) {
+        if (it.key() == normalized || it.key().startsWith(prefix)) {
+            it = m_pathPolicies.erase(it);
+        } else {
+            ++it;
         }
     }
     m_pathPolicies.insert(normalized, availability);
