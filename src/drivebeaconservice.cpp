@@ -244,6 +244,31 @@ QVariantMap DriveBeaconService::evictPath(const QString &profileName,
     return operationResult(true, QStringLiteral("Local cache release queued."));
 }
 
+QVariantMap DriveBeaconService::notifyLocalChange(const QString &profileName)
+{
+    auto *controller = m_controllers.value(profileName.trimmed(), nullptr);
+    if (!controller) {
+        return operationResult(false, QStringLiteral("Profile is not loaded."));
+    }
+    controller->notifyGraphLocalChange();
+    return operationResult(true, QStringLiteral("Local change scan requested."));
+}
+
+QVariantMap DriveBeaconService::renameLocalPath(const QString &profileName,
+                                                const QString &oldPath,
+                                                const QString &newPath)
+{
+    auto *controller = m_controllers.value(profileName.trimmed(), nullptr);
+    if (!controller) {
+        return operationResult(false, QStringLiteral("Profile is not loaded."));
+    }
+    if (oldPath.trimmed().isEmpty() || newPath.trimmed().isEmpty()) {
+        return operationResult(false, QStringLiteral("Both relative paths are required."));
+    }
+    controller->renameGraphPath(oldPath, newPath);
+    return operationResult(true, QStringLiteral("Local rename queued."));
+}
+
 QVariantMap DriveBeaconService::mountProfile(const QString &profileName)
 {
     const QString name = profileName.trimmed();

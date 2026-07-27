@@ -75,6 +75,11 @@ public Q_SLOTS:
     QVariantMap keepLocalPath(const QString &profileName, const QString &relativePath);
     /** Releases one cached file or folder without changing remote content. */
     QVariantMap evictPath(const QString &profileName, const QString &relativePath);
+    /** Wakes local-to-remote detection after a writable FUSE operation. */
+    QVariantMap notifyLocalChange(const QString &profileName);
+    /** Propagates a FUSE rename while preserving the remote driveItem ID. */
+    QVariantMap renameLocalPath(const QString &profileName, const QString &oldPath,
+                                const QString &newPath);
     /** Mounts one profile's read-only FUSE view at its configured user path. */
     QVariantMap mountProfile(const QString &profileName);
     /** Unmounts one profile without changing synchronization or remote state. */

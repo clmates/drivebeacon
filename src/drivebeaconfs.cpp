@@ -48,6 +48,8 @@ struct OpenFile {
     QString relativePath;
     qint64 expectedSize = -1;
     std::unique_ptr<QFile> file;
+    bool writable = false;
+    bool dirty = false;
 };
 
 FileSystemContext *context()
@@ -184,6 +186,17 @@ QList<QPair<QString, bool>> childrenOf(const QVariantList &entries, const QStrin
     for (auto it = children.cbegin(); it != children.cend(); ++it) {
         result.append({it.key(), it.value()});
     }
+    // Include files created in the private cache before Graph has assigned
+    // them an item ID. This keeps a newly written FUSE file visible during
+    // the short interval before the next local scan/upload.
+    const QFileInfoList localChildren = QDir(localPath(parent)).entryInfoList(
+        QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden);
+    for (const QFileInfo &child : localChildren) {
+        if (children.contains(child.fileName())) {
+            continue;
+        }
+        result.append({child.fileName(), child.isDir()});
+    }
     qInfo().noquote() << "DriveBeacon FUSE: children" << parent << result.size();
     return result;
 }
@@ -199,11 +212,11 @@ bool statFromEntry(const QString &relative, const QVariantMap &entry, struct sta
     st->st_gid = getgid();
     st->st_atime = st->st_mtime = st->st_ctime = std::time(nullptr);
     if (entry.value(QStringLiteral("folder")).toBool()) {
-        st->st_mode = S_IFDIR | 0555;
+        st->st_mode = S_IFDIR | 0755;
         st->st_nlink = 2;
         st->st_size = 4096;
     } else {
-        st->st_mode = S_IFREG | 0444;
+        st->st_mode = S_IFREG | 0644;
         st->st_nlink = 1;
         qint64 size = entry.value(QStringLiteral("size")).toLongLong();
         if (!entry.value(QStringLiteral("sizeKnown")).toBool()
@@ -218,6 +231,22 @@ bool statFromEntry(const QString &relative, const QVariantMap &entry, struct sta
         st->st_size = size;
     }
     return true;
+}
+
+/** Reports a completed local mutation so the service starts upload/delete detection. */
+int notifyLocalChange()
+{
+    const QDBusMessage reply = context()->service.call(
+        QStringLiteral("notifyLocalChange"), context()->profile);
+    return reply.type() == QDBusMessage::ErrorMessage ? -EIO : 0;
+}
+
+/** Reports a local rename explicitly so folders retain their remote identity. */
+int notifyLocalRename(const QString &oldPath, const QString &newPath)
+{
+    const QDBusMessage reply = context()->service.call(
+        QStringLiteral("renameLocalPath"), context()->profile, oldPath, newPath);
+    return reply.type() == QDBusMessage::ErrorMessage ? -EIO : 0;
 }
 
 int requestMaterialization(const QString &relative, qint64 expectedSize)
@@ -263,7 +292,16 @@ int fsGetattr(const char *path, struct stat *st, struct fuse_file_info *)
         st->st_nlink = 2;
         return 0;
     }
-    const QVariantMap entry = findEntry(relative);
+    QVariantMap entry = findEntry(relative);
+    if (entry.isEmpty()) {
+        const QFileInfo local(localPath(relative));
+        if (local.isDir() || local.isFile()) {
+            entry = {{QStringLiteral("path"), relative},
+                     {QStringLiteral("folder"), local.isDir()},
+                     {QStringLiteral("size"), local.isDir() ? 0LL : local.size()},
+                     {QStringLiteral("sizeKnown"), true}};
+        }
+    }
     if (entry.isEmpty()) {
         qWarning().noquote() << "DriveBeacon FUSE: getattr missing remote path" << relative;
         return -ENOENT;
@@ -280,7 +318,9 @@ int fsReaddir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t,
     // request hundreds of child attributes while opening a folder; issuing a
     // synchronous D-Bus call for every child made the UI appear frozen.
     const QVariantList entries = remoteEntries();
-    if (!relative.isEmpty() && !findEntryIn(entries, relative).value(QStringLiteral("folder")).toBool()) {
+    const QVariantMap directoryEntry = findEntryIn(entries, relative);
+    if (!relative.isEmpty() && !directoryEntry.value(QStringLiteral("folder")).toBool()
+        && !QFileInfo(localPath(relative)).isDir()) {
         qWarning().noquote() << "DriveBeacon FUSE: readdir requested for non-directory" << relative;
         return -ENOTDIR;
     }
@@ -318,22 +358,71 @@ int fsOpen(const char *path, struct fuse_file_info *info)
     // application opening it for actual content access.
     qInfo().noquote() << "DriveBeacon FUSE: open" << relative
                       << QStringLiteral("flags=0x") + QString::number(info->flags, 16);
-    const QVariantMap entry = findEntry(relative);
+    QVariantMap entry = findEntry(relative);
+    if (entry.isEmpty()) {
+        // Editors commonly create a private temporary file and reopen it
+        // before the service's local scan has assigned a remote item ID.
+        // FUSE must treat that cache entry as a valid local file instead of
+        // returning ENOENT merely because it is not remote yet.
+        const QFileInfo local(localPath(relative));
+        if (local.isFile()) {
+            entry = {{QStringLiteral("path"), relative},
+                     {QStringLiteral("folder"), false},
+                     {QStringLiteral("size"), local.size()},
+                     {QStringLiteral("sizeKnown"), true}};
+        }
+    }
     if (entry.isEmpty() || entry.value(QStringLiteral("folder")).toBool()) {
         qWarning().noquote() << "DriveBeacon FUSE: open missing or directory" << relative;
         return -ENOENT;
     }
-    if ((info->flags & O_ACCMODE) != O_RDONLY) {
-        qWarning().noquote() << "DriveBeacon FUSE: write access rejected" << relative;
-        return -EROFS;
+    const int accessMode = info->flags & O_ACCMODE;
+    if (accessMode != O_RDONLY) {
+        const QString cachedPath = localPath(relative);
+        if (info->flags & O_TRUNC) {
+            QFile::remove(cachedPath);
+        } else if (!QFileInfo(cachedPath).isFile()
+                   || (context()->entrySnapshotValid
+                       && findEntry(relative).value(QStringLiteral("placeholder")).toBool())) {
+            const int result = requestMaterialization(
+                relative, entry.value(QStringLiteral("size")).toLongLong());
+            if (result != 0) {
+                return result;
+            }
+        }
+        auto file = std::make_unique<QFile>(cachedPath);
+        if (!file->open(QIODevice::ReadWrite)) {
+            return -EACCES;
+        }
+        auto *openFile = new OpenFile{relative, file->size(), std::move(file), true, false};
+        info->fh = reinterpret_cast<quintptr>(openFile);
+        return 0;
     }
     const qint64 size = entry.value(QStringLiteral("sizeKnown")).toBool()
         ? entry.value(QStringLiteral("size")).toLongLong() : -1;
     // Dolphin may open a placeholder only to inspect it before constructing a
     // context menu. Delaying the network operation until fsRead prevents that
     // metadata probe from unexpectedly downloading the selected file.
-    auto *file = new OpenFile{relative, size, nullptr};
+    auto *file = new OpenFile{relative, size, nullptr, false, false};
     info->fh = reinterpret_cast<quintptr>(file);
+    return 0;
+}
+
+/** Creates a writable cache file for O_CREAT before Graph sees the new item. */
+int fsCreate(const char *path, mode_t mode, struct fuse_file_info *info)
+{
+    Q_UNUSED(mode)
+    const QString relative = relativePath(path);
+    const QString cachedPath = localPath(relative);
+    if (cachedPath.isEmpty() || !QDir().mkpath(QFileInfo(cachedPath).absolutePath())) {
+        return -EACCES;
+    }
+    auto file = std::make_unique<QFile>(cachedPath);
+    if (!file->open(QIODevice::ReadWrite | QIODevice::Truncate)) {
+        return -EACCES;
+    }
+    auto *openFile = new OpenFile{relative, 0, std::move(file), true, true};
+    info->fh = reinterpret_cast<quintptr>(openFile);
     return 0;
 }
 
@@ -367,12 +456,134 @@ int fsRead(const char *, char *buffer, size_t size, off_t offset, struct fuse_fi
     return static_cast<int>(openFile->file->read(buffer, static_cast<qint64>(size)));
 }
 
+/** Writes bytes into the private cache; remote upload starts after flush/close. */
+int fsWrite(const char *, const char *buffer, size_t size, off_t offset,
+            struct fuse_file_info *info)
+{
+    auto *openFile = reinterpret_cast<OpenFile *>(info->fh);
+    if (!openFile || !openFile->writable || !openFile->file) {
+        return -EBADF;
+    }
+    if (!openFile->file->seek(offset)) {
+        return -EIO;
+    }
+    const qint64 written = openFile->file->write(buffer, static_cast<qint64>(size));
+    if (written > 0) {
+        openFile->dirty = true;
+    }
+    return written < 0 ? -EIO : static_cast<int>(written);
+}
+
+/** Flushes cache bytes and wakes the service local mutation scanner. */
+int fsFlush(const char *, struct fuse_file_info *info)
+{
+    auto *openFile = reinterpret_cast<OpenFile *>(info->fh);
+    if (!openFile || !openFile->file) {
+        return -EBADF;
+    }
+    if (!openFile->file->flush()) {
+        return -EIO;
+    }
+    if (openFile->dirty) {
+        const int result = notifyLocalChange();
+        if (result != 0) {
+            return result;
+        }
+        openFile->dirty = false;
+    }
+    return 0;
+}
+
+/** Provides fsync semantics for applications that explicitly request durability. */
+int fsFsync(const char *, int, struct fuse_file_info *info)
+{
+    return fsFlush(nullptr, info);
+}
+
+/** Removes cached content and lets the local scanner decide remote deletion. */
+int fsUnlink(const char *path)
+{
+    const QString relative = relativePath(path);
+    const QVariantMap entry = findEntry(relative);
+    const QString cachedPath = localPath(relative);
+    if (entry.value(QStringLiteral("placeholder")).toBool()
+        && !QFileInfo(cachedPath).isFile()) {
+        // A zero-byte marker is not user content. Refusing this operation
+        // prevents a normal filesystem delete from deleting the remote item.
+        return -EROFS;
+    }
+    if (!QFile::remove(cachedPath)) {
+        return -ENOENT;
+    }
+    return notifyLocalChange();
+}
+
+/** Renames cache content; GraphClient preserves the remote item ID when possible. */
+int fsRename(const char *from, const char *to, unsigned int flags)
+{
+    if (flags != 0) {
+        return -EINVAL;
+    }
+    const QString oldRelative = relativePath(from);
+    const QString newRelative = relativePath(to);
+    const QString oldPath = localPath(oldRelative);
+    const QString newPath = localPath(newRelative);
+    if (oldRelative.isEmpty() || newRelative.isEmpty() || newPath.isEmpty()) {
+        return -EINVAL;
+    }
+    if (!QDir().mkpath(QFileInfo(newPath).absolutePath())
+        || !QFile::rename(oldPath, newPath)) {
+        return -EIO;
+    }
+    // Tell Graph the exact old/new paths. A generic scan cannot reliably
+    // infer a directory rename because its descendants keep their content.
+    return notifyLocalRename(oldRelative, newRelative);
+}
+
+/** Creates a local cache directory; the service queues its Graph counterpart. */
+int fsMkdir(const char *path, mode_t mode)
+{
+    Q_UNUSED(mode)
+    const QString relative = relativePath(path);
+    const QString directory = localPath(relative);
+    if (relative.isEmpty() || directory.isEmpty() || !QDir().mkpath(directory)) {
+        return -EIO;
+    }
+    return notifyLocalChange();
+}
+
+/** Resizes a cached file and marks it dirty for the normal upload pipeline. */
+int fsTruncate(const char *path, off_t size, struct fuse_file_info *info)
+{
+    OpenFile *openFile = info ? reinterpret_cast<OpenFile *>(info->fh) : nullptr;
+    if (openFile && openFile->file) {
+        if (!openFile->file->resize(size)) {
+            return -EIO;
+        }
+        openFile->dirty = true;
+        return 0;
+    }
+    const QString relative = relativePath(path);
+    const QString cachedPath = localPath(relative);
+    QFile file(cachedPath);
+    if (!file.open(QIODevice::ReadWrite) || !file.resize(size)) {
+        return -EIO;
+    }
+    file.close();
+    return notifyLocalChange();
+}
+
 /** Releases the cache handle without deleting or mutating remote content. */
 int fsRelease(const char *, struct fuse_file_info *info)
 {
-    delete reinterpret_cast<OpenFile *>(info->fh);
+    auto *openFile = reinterpret_cast<OpenFile *>(info->fh);
+    int result = 0;
+    if (openFile && openFile->dirty) {
+        result = fsFlush(nullptr, info);
+    }
+    delete openFile;
     info->fh = 0;
-    return 0;
+    return result;
 }
 }
 
@@ -402,7 +613,15 @@ int main(int argc, char **argv)
     operations.getattr = fsGetattr;
     operations.readdir = fsReaddir;
     operations.open = fsOpen;
+    operations.create = fsCreate;
     operations.read = fsRead;
+    operations.write = fsWrite;
+    operations.flush = fsFlush;
+    operations.fsync = fsFsync;
+    operations.unlink = fsUnlink;
+    operations.rename = fsRename;
+    operations.mkdir = fsMkdir;
+    operations.truncate = fsTruncate;
     operations.release = fsRelease;
     std::vector<char *> fuseArgs;
     fuseArgs.reserve(static_cast<size_t>(argc) + 1);

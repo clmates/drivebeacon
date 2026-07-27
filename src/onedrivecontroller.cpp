@@ -755,6 +755,22 @@ void OneDriveController::evictGraphPath(const QString &relativePath)
     m_graphClient.evictPath(relativePath);
 }
 
+void OneDriveController::notifyGraphLocalChange()
+{
+    if (m_profile.backend == SyncBackend::MicrosoftGraph && graphAuthenticated()
+        && m_graphSyncEnabled) {
+        m_graphClient.scanLocalChangesNow();
+    }
+}
+
+void OneDriveController::renameGraphPath(const QString &oldPath, const QString &newPath)
+{
+    if (m_profile.backend == SyncBackend::MicrosoftGraph && graphAuthenticated()
+        && m_graphSyncEnabled) {
+        m_graphClient.renameLocalPath(oldPath, newPath);
+    }
+}
+
 void OneDriveController::setGlobalGraphSyncEnabled(bool enabled)
 {
     m_globalGraphSyncEnabled = enabled;

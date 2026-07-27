@@ -139,6 +139,10 @@ public:
     void materializePath(const QString &relativePath);
     /** Evicts cached content without issuing any remote deletion. */
     void evictPath(const QString &relativePath);
+    /** Queues an explicit FUSE rename while preserving the remote item ID. */
+    void renameLocalPath(const QString &oldPath, const QString &newPath);
+    /** Runs the local-change scan immediately after a FUSE write or close. */
+    void scanLocalChangesNow();
 
 Q_SIGNALS:
     /** Emitted when Graph returns a valid quota snapshot. */
@@ -201,6 +205,8 @@ private:
     void scanLocalChanges();
     /** Uploads the next local create or content update. */
     void uploadNextLocalFile();
+    /** Creates the next local directory in Graph before child uploads run. */
+    void createNextRemoteFolder();
     /** Starts queued uploads while the upload concurrency budget has capacity. */
     void startPendingUploads();
     /** Starts one small direct upload or large upload-session transfer. */
@@ -236,6 +242,8 @@ private:
     [[nodiscard]] bool shouldKeepRemotePath(const QString &relativePath) const;
     /** Requeues missing cached files covered by persisted KeepLocal policies. */
     void queuePersistedMaterializations();
+    /** Moves every persisted path index below a renamed local/remote folder. */
+    void remapPathPrefix(const QString &oldPath, const QString &newPath);
 
     QNetworkAccessManager m_network;
     /** Credentials and filters used by the initial synchronization operation. */
@@ -251,6 +259,8 @@ private:
     QQueue<GraphLocalFile> m_pendingUploads;
     QQueue<GraphRemoteDelete> m_pendingRemoteDeletes;
     QQueue<GraphRemoteRename> m_pendingRemoteRenames;
+    /** Local directories waiting for their corresponding Graph folder item. */
+    QQueue<QString> m_pendingRemoteFolders;
     QSet<QString> m_pendingRemoteDeletePaths;
     /** Current remote identity index: path -> item/folder ID. */
     QHash<QString, QString> m_remoteItemIds;
@@ -298,7 +308,11 @@ private:
     /** Active local-to-remote delete, aborted when entering RemoteOnly. */
     QPointer<QNetworkReply> m_activeDeleteReply;
     bool m_renameInProgress = false;
+    bool m_folderCreateInProgress = false;
+    QSet<QString> m_pendingRemoteFolderPaths;
     QSet<QString> m_pendingRemoteRenamePaths;
+    /** Rename conflicts are retained until the user resolves the local pair. */
+    QSet<QString> m_blockedRemoteRenamePaths;
     QSet<QString> m_pendingUploadPaths;
     /**
      * Local mutations echoed by Graph are consumed without downloading again.

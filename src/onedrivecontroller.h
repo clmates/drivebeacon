@@ -115,6 +115,10 @@ public:
     void reloadProfileSettings(const SyncProfile &profile);
     /** Applies KeepLocal or OnDemand to one file/folder and persists it. */
     void setGraphPathPolicy(const QString &relativePath, const QString &availability);
+    /** Wakes local change detection after a mutation made through FUSE. */
+    void notifyGraphLocalChange();
+    /** Propagates an explicit FUSE rename without waiting for hash inference. */
+    void renameGraphPath(const QString &oldPath, const QString &newPath);
 
     /** Starts the user's OneDrive systemd service. */
     Q_INVOKABLE void startService();
