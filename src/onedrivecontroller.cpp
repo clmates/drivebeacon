@@ -48,7 +48,6 @@ OneDriveController::OneDriveController(const QString &profileName,
 {
     // Configure materialization before any restored delta or initial scan is
     // started; RemoteOnly must never enqueue local content transfers.
-    m_graphClient.setLocalAvailability(m_profile.availability);
     m_graphClient.setPathPolicies(m_profile.graphPathPolicies);
     m_graphClient.setPlaceholderPaths(m_profile.graphPlaceholderPaths);
     m_globalGraphSyncEnabled = m_profileStore.globalSyncEnabled();

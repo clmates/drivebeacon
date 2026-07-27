@@ -495,16 +495,6 @@ void GraphClient::configureTransferConcurrency(int downloads, int uploads, int l
                     .arg(m_maxConcurrentLargeTransfers));
 }
 
-void GraphClient::setLocalAvailability(LocalAvailability availability)
-{
-    Q_UNUSED(availability);
-    // Profile-wide KeepLocal/RemoteOnly is retained only for reading old
-    // configuration. Never evict or enqueue the whole profile here: those
-    // decisions now come from the inherited path policy for each item.
-    m_defaultAvailability = LocalAvailability::OnDemand;
-    m_materializeFiles = false;
-}
-
 void GraphClient::setPathPolicies(const QStringList &policies)
 {
     m_pathPolicies.clear();
@@ -1164,9 +1154,8 @@ void GraphClient::processNextFolder()
         // succeed while a stale service or a disabled materializer leaves the
         // transfer queue untouched. It also makes forced remote refreshes
         // auditable without dumping file contents or access tokens.
-        log(QStringLiteral("Graph sync: comparison queued %1 file(s), materialize=%2, monitoring=%3")
+        log(QStringLiteral("Graph sync: comparison queued %1 file(s), mode=on-demand, monitoring=%2")
                 .arg(m_pendingFiles.size())
-                .arg(m_materializeFiles ? QStringLiteral("yes") : QStringLiteral("no"))
                 .arg(m_monitoringEnabled ? QStringLiteral("yes") : QStringLiteral("no")));
         processNextFile();
         return;

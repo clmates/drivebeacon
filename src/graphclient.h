@@ -111,8 +111,6 @@ public:
     void stopMonitoring();
     /** Applies per-profile transfer limits before synchronization starts. */
     void configureTransferConcurrency(int downloads, int uploads, int largeTransfers);
-    /** Sets the profile-wide fallback for materializing content in the service cache. */
-    void setLocalAvailability(LocalAvailability availability);
     /** Applies persisted path overrides; descendants inherit the nearest rule. */
     void setPathPolicies(const QStringList &policies);
     /** Returns path policies in the persisted path<TAB>availability format. */
@@ -291,8 +289,6 @@ private:
     /** Indicates that one or more uploads are active. */
     bool m_uploadInProgress = false;
     /** True when the profile-wide fallback automatically materializes content. */
-    // Profile-wide materialization is disabled; KeepLocal is evaluated per path.
-    bool m_materializeFiles = false;
     /** Whether the profile-wide fallback owns placeholders and cache eviction. */
     /** Profile-wide fallback used when no path override matches. */
     LocalAvailability m_defaultAvailability = LocalAvailability::OnDemand;
