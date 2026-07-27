@@ -27,6 +27,8 @@ public:
                            QWidget *parent = nullptr);
 
 Q_SIGNALS:
+    /** Notifies the tray that a persisted profile must be reloaded by the service. */
+    void profileSaved(const QString &profileName);
     /** Requests relaunching DriveBeacon with the selected profile. */
     void useProfileRequested(const QString &profileName);
 

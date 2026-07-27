@@ -79,6 +79,8 @@ public:
     [[nodiscard]] ProfileStore *profileStore();
     /** Returns the configured local availability policy. */
     [[nodiscard]] QString availabilityName() const;
+    /** Returns the user-visible FUSE path held by this controller. */
+    [[nodiscard]] QString mountDirectory() const;
     /** Returns the last reported remote capacity in bytes. */
     [[nodiscard]] qint64 remoteQuotaTotal() const;
     /** Returns bytes reported as used by the remote drive. */
@@ -109,6 +111,8 @@ public:
     [[nodiscard]] QVariantList graphRemoteEntries() const;
     /** Applies persisted per-path availability rules without resetting Graph state. */
     void setGraphPathPolicies(const QStringList &policies);
+    /** Applies settings reloaded by the headless service without replacing Graph state. */
+    void reloadProfileSettings(const SyncProfile &profile);
     /** Applies KeepLocal or OnDemand to one file/folder and persists it. */
     void setGraphPathPolicy(const QString &relativePath, const QString &availability);
 

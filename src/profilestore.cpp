@@ -3,7 +3,16 @@
 #include "profilestore.h"
 
 #include <QDir>
+#include <QStandardPaths>
 #include <QSettings>
+
+QSettings ProfileStore::settings()
+{
+    const QString configFile = QDir(
+        QStandardPaths::writableLocation(QStandardPaths::ConfigLocation))
+        .filePath(QStringLiteral("clmates/drivebeacon.conf"));
+    return QSettings(configFile, QSettings::IniFormat);
+}
 
 ProfileStore::ProfileStore(QObject *parent)
     : QObject(parent)
@@ -20,14 +29,14 @@ QString ProfileStore::normalizedName(const QString &name)
 
 QStringList ProfileStore::profileNames() const
 {
-    QSettings settings;
+    QSettings settings = ProfileStore::settings();
     settings.beginGroup(QStringLiteral("profiles"));
     return settings.childGroups();
 }
 
 QString ProfileStore::activeProfileName() const
 {
-    QSettings settings;
+    QSettings settings = ProfileStore::settings();
     return normalizedName(settings.value(QStringLiteral("profiles/active"),
                                          QStringLiteral("default"))
                               .toString());
@@ -35,7 +44,7 @@ QString ProfileStore::activeProfileName() const
 
 SyncProfile ProfileStore::load(const QString &requestedName) const
 {
-    QSettings settings;
+    QSettings settings = ProfileStore::settings();
     const QString name = normalizedName(requestedName.isEmpty() ? activeProfileName()
                                                                   : requestedName);
     settings.beginGroup(QStringLiteral("profiles/%1").arg(name));
@@ -99,7 +108,7 @@ SyncProfile ProfileStore::load(const QString &requestedName) const
 
 void ProfileStore::save(const SyncProfile &profile)
 {
-    QSettings settings;
+    QSettings settings = ProfileStore::settings();
     const QString name = normalizedName(profile.name);
     settings.beginGroup(QStringLiteral("profiles/%1").arg(name));
     settings.setValue(QStringLiteral("name"), name);
@@ -135,20 +144,20 @@ void ProfileStore::save(const SyncProfile &profile)
 
 bool ProfileStore::globalSyncEnabled() const
 {
-    QSettings settings;
+    QSettings settings = ProfileStore::settings();
     return settings.value(QStringLiteral("profiles/globalSyncEnabled"), true).toBool();
 }
 
 void ProfileStore::setGlobalSyncEnabled(bool enabled)
 {
-    QSettings settings;
+    QSettings settings = ProfileStore::settings();
     settings.setValue(QStringLiteral("profiles/globalSyncEnabled"), enabled);
     settings.sync();
 }
 
 void ProfileStore::setActiveProfileName(const QString &name)
 {
-    QSettings settings;
+    QSettings settings = ProfileStore::settings();
     settings.setValue(QStringLiteral("profiles/active"), normalizedName(name));
     settings.sync();
 }

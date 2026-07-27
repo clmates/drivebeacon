@@ -6,6 +6,7 @@
 
 #include <QObject>
 #include <QStringList>
+#include <QSettings>
 
 /** Stores the active profile in the user's application settings. */
 class ProfileStore final : public QObject
@@ -32,6 +33,8 @@ public:
     void setActiveProfileName(const QString &name);
 
 private:
+    /** Opens the shared INI file used identically by tray and service. */
+    [[nodiscard]] static QSettings settings();
     /** Maps user-facing names to safe QSettings group components. */
     [[nodiscard]] static QString normalizedName(const QString &name);
 };

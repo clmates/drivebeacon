@@ -220,8 +220,6 @@ private:
     void processPendingLocalOperations();
     /** Returns whether a path is covered by the include/exclude profile policy. */
     [[nodiscard]] bool isIncluded(const QString &relativePath) const;
-    /** Evicts cached files when a profile-wide RemoteOnly policy is applied. */
-    void evictMaterializedFiles();
     /** Creates a zero-byte visible marker for a remote-only file. */
     void createPlaceholder(const QString &relativePath);
     /** Returns whether a remote folder should be traversed during enumeration. */
@@ -236,6 +234,8 @@ private:
     [[nodiscard]] bool shouldMaterializePath(const QString &relativePath) const;
     /** Returns whether a path should be represented by a placeholder. */
     [[nodiscard]] bool shouldKeepRemotePath(const QString &relativePath) const;
+    /** Requeues missing cached files covered by persisted KeepLocal policies. */
+    void queuePersistedMaterializations();
 
     QNetworkAccessManager m_network;
     /** Credentials and filters used by the initial synchronization operation. */

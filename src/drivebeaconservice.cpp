@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QSet>
+#include <QTimer>
 
 namespace {
 
@@ -57,6 +58,19 @@ void DriveBeaconService::reloadProfiles()
     const QStringList configuredProfileNames = m_profileStore.profileNames();
     const QSet<QString> configuredProfiles = QSet<QString>(
         configuredProfileNames.cbegin(), configuredProfileNames.cend());
+    // Remove controllers for deleted profiles or profiles switched to the
+    // optional legacy backend. Their cache and remote data remain untouched;
+    // only this service's in-memory owner is retired.
+    const QStringList loadedProfiles = m_controllers.keys();
+    for (const QString &name : loadedProfiles) {
+        const SyncProfile profile = m_profileStore.load(name);
+        if (!configuredProfiles.contains(name)
+            || profile.backend != SyncBackend::MicrosoftGraph) {
+            unmountProfile(name);
+            auto *controller = m_controllers.take(name);
+            controller->deleteLater();
+        }
+    }
     for (const QString &name : configuredProfiles) {
         const SyncProfile profile = m_profileStore.load(name);
         if (profile.backend != SyncBackend::MicrosoftGraph) {
@@ -65,7 +79,14 @@ void DriveBeaconService::reloadProfiles()
         if (m_controllers.contains(name)) {
             auto *controller = m_controllers.value(name);
             controller->setGlobalGraphSyncEnabled(globallyEnabled);
-            controller->setGraphPathPolicies(profile.graphPathPolicies);
+            const QString oldMountPoint = controller->mountDirectory();
+            controller->reloadProfileSettings(profile);
+            if (oldMountPoint != profile.mountDirectory) {
+                unmountProfile(name);
+                if (controller->graphAuthenticated()) {
+                    QTimer::singleShot(0, this, [this, name] { mountProfile(name); });
+                }
+            }
             continue;
         }
         // A paused profile remains configured and keeps its persisted state;
@@ -82,6 +103,16 @@ void DriveBeaconService::reloadProfiles()
                 this, &DriveBeaconService::publishStatus);
         connect(controller, &OneDriveController::graphAuthChanged,
                 this, &DriveBeaconService::publishStatus);
+        // Mounts are service-owned runtime state, so a service restart drops
+        // the helper process. Recreate the user's configured FUSE view as soon
+        // as that profile has authenticated instead of requiring the tray to
+        // issue a second mount command.
+        connect(controller, &OneDriveController::graphAuthChanged, this,
+                [this, name, controller] {
+                    if (controller->graphAuthenticated()) {
+                        QTimer::singleShot(0, this, [this, name] { mountProfile(name); });
+                    }
+                });
         connect(controller, &OneDriveController::logMessage, this,
                 [this, name](const QString &message) {
                     // Include the account key so the shared tray history can
@@ -90,6 +121,9 @@ void DriveBeaconService::reloadProfiles()
                 });
         connect(controller, &OneDriveController::errorMessageChanged,
                 this, &DriveBeaconService::publishStatus);
+        if (controller->graphAuthenticated()) {
+            QTimer::singleShot(0, this, [this, name] { mountProfile(name); });
+        }
     }
     if (m_requestedProfileName.isEmpty()) {
         m_activeProfileName = m_profileStore.activeProfileName();

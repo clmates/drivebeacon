@@ -140,6 +140,8 @@ possible.
   scanning the complete configuration for every displayed item.
 - Batch multi-selection actions instead of starting one CLI process per path.
 - Make actions available for every supported file type and directory.
+- Add a clear per-item or per-folder overlay/column state for `Keep Local`,
+  `On Demand`, `Release Local cache`, materializing, and cached content.
 - Keep overlays lightweight and non-blocking.
 
 Completion criterion: opening a directory containing thousands of DriveBeacon

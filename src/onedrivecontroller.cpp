@@ -423,6 +423,11 @@ QString OneDriveController::availabilityName() const
     return localAvailabilityName(m_profile.availability);
 }
 
+QString OneDriveController::mountDirectory() const
+{
+    return m_profile.mountDirectory;
+}
+
 qint64 OneDriveController::remoteQuotaTotal() const
 {
     return m_remoteQuota.total;
@@ -493,6 +498,72 @@ void OneDriveController::setGraphPathPolicies(const QStringList &policies)
     m_graphClient.setPathPolicies(policies);
     m_profile.graphPathPolicies = m_graphClient.pathPolicies();
     m_profileStore.save(m_profile);
+}
+
+void OneDriveController::reloadProfileSettings(const SyncProfile &profile)
+{
+    const bool foldersChanged = m_profile.includedFolders != profile.includedFolders
+        || m_profile.excludedFolders != profile.excludedFolders;
+    const bool policiesChanged = m_profile.graphPathPolicies != profile.graphPathPolicies;
+    const bool transferSettingsChanged = m_profile.remoteCheckIntervalSeconds
+            != profile.remoteCheckIntervalSeconds
+        || m_profile.concurrentDownloads != profile.concurrentDownloads
+        || m_profile.concurrentUploads != profile.concurrentUploads
+        || m_profile.concurrentLargeTransfers != profile.concurrentLargeTransfers;
+    const bool syncStateChanged = m_profile.syncEnabled != profile.syncEnabled;
+    const bool driveChanged = m_profile.remoteDriveId != profile.remoteDriveId;
+
+    // Preserve runtime baselines and tokens. ProfileStore already contains the
+    // latest persisted delta/signatures; replacing those here would let a
+    // delayed configuration reload roll the active controller backwards.
+    m_profile.graphClientId = profile.graphClientId;
+    m_profile.remoteDriveId = profile.remoteDriveId;
+    m_profile.mountDirectory = profile.mountDirectory;
+    m_profile.includedFolders = profile.includedFolders;
+    m_profile.excludedFolders = profile.excludedFolders;
+    m_profile.graphPathPolicies = profile.graphPathPolicies;
+    m_profile.remoteCheckIntervalSeconds = profile.remoteCheckIntervalSeconds;
+    m_profile.concurrentDownloads = profile.concurrentDownloads;
+    m_profile.concurrentUploads = profile.concurrentUploads;
+    m_profile.concurrentLargeTransfers = profile.concurrentLargeTransfers;
+    m_profile.syncEnabled = profile.syncEnabled;
+
+    if (policiesChanged) {
+        m_graphClient.setPathPolicies(m_profile.graphPathPolicies);
+    }
+    if (syncStateChanged) {
+        setGraphSyncEnabled(m_profile.syncEnabled);
+        return;
+    }
+    if (m_profile.backend != SyncBackend::MicrosoftGraph || !m_graphSyncEnabled
+        || !graphAuthenticated() || m_profile.remoteDriveId.isEmpty()) {
+        return;
+    }
+    if (foldersChanged || policiesChanged || driveChanged) {
+        // Re-enumerate the selected tree without resetting the delta cursor;
+        // this discovers newly included or newly KeepLocal paths and leaves
+        // deselected local content untouched.
+        m_graphClient.stopMonitoring();
+        m_graphClient.initializeLocalMonitoring(m_profile.graphLocalSignatures,
+                                                m_profile.graphRemotePaths,
+                                                m_profile.localDirectory);
+        m_graphClient.configureTransferConcurrency(
+            m_profile.concurrentDownloads, m_profile.concurrentUploads,
+            m_profile.concurrentLargeTransfers);
+        m_graphClient.refreshSelectedFolders(
+            m_profile.remoteDriveId, m_graphTokens.accessToken,
+            m_profile.localDirectory, m_profile.includedFolders,
+            m_profile.excludedFolders);
+        return;
+    }
+    if (transferSettingsChanged) {
+        m_graphClient.configureTransferConcurrency(
+            m_profile.concurrentDownloads, m_profile.concurrentUploads,
+            m_profile.concurrentLargeTransfers);
+        m_graphClient.startRemoteMonitoring(
+            m_profile.remoteDriveId, m_graphTokens.accessToken,
+            m_profile.remoteCheckIntervalSeconds, m_profile.graphDeltaLink);
+    }
 }
 
 void OneDriveController::setGraphPathPolicy(const QString &relativePath,

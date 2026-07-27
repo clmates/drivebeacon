@@ -336,6 +336,7 @@ void ProfileDialog::saveProfile()
     // this list here keeps a save of unrelated settings non-destructive.
     m_store->save(profile);
     m_store->setGlobalSyncEnabled(m_globalSyncEnabledCheck->isChecked());
+    Q_EMIT profileSaved(name);
     refreshProfileList(name);
 }
 

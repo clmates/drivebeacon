@@ -677,38 +677,31 @@ void GraphClient::initializeLocalMonitoring(const QStringList &signatures,
             }
         }
     }
+    queuePersistedMaterializations();
     if (m_monitoringEnabled) {
         m_uploadTimer.start();
     }
 }
 
-void GraphClient::evictMaterializedFiles()
+void GraphClient::queuePersistedMaterializations()
 {
-    const QStringList localPaths = m_localSignatures.keys();
-    for (const QString &relativePath : localPaths) {
-        if (!isIncluded(relativePath)) {
+    int queued = 0;
+    for (auto it = m_remoteItemIds.cbegin(); it != m_remoteItemIds.cend(); ++it) {
+        const QString &relativePath = it.key();
+        if (isRemoteFolderPath(relativePath) || !shouldMaterializePath(relativePath)) {
             continue;
         }
         const QString localPath = safeLocalPath(relativePath);
-        if (localPath.isEmpty()) {
+        if (localPath.isEmpty()
+            || (QFileInfo(localPath).isFile() && !m_placeholderPaths.contains(relativePath))) {
             continue;
         }
-        if (QFileInfo::exists(localPath) && !QFile::remove(localPath)) {
-            Q_EMIT errorOccurred(QStringLiteral("Could not evict local file: %1")
-                                     .arg(relativePath));
-            continue;
-        }
-        createPlaceholder(relativePath);
-        log(QStringLiteral("Graph sync: evicted local %1 (Remote only)")
-                .arg(relativePath));
+        m_pendingFiles.enqueue({it.value(), relativePath, m_remoteSizes.value(relativePath, -1)});
+        ++queued;
     }
-    for (const QString &relativePath : localPaths) {
-        if (isIncluded(relativePath)) {
-            m_localSignatures.remove(relativePath);
-            m_localMetadata.remove(relativePath);
-        }
+    if (queued > 0) {
+        log(QStringLiteral("Graph sync: resumed %1 Keep Local file(s) after restart").arg(queued));
     }
-    Q_EMIT placeholderStateChanged(placeholderPaths());
 }
 
 void GraphClient::createPlaceholder(const QString &relativePath)

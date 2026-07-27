@@ -186,6 +186,12 @@ int main(int argc, char *argv[])
                      controller.activities(), &ActivityModel::clear);
     QObject::connect(configurationAction, &QAction::triggered, &application, [&] {
         auto *dialog = new ProfileDialog(controller.profileStore(), &controller, nullptr);
+        QObject::connect(dialog, &ProfileDialog::profileSaved, &application,
+                         [&serviceClient](const QString &) {
+                             if (serviceClient.available()) {
+                                 serviceClient.reloadProfiles();
+                             }
+                         });
         QObject::connect(dialog, &ProfileDialog::useProfileRequested,
                          &application, [dialog, &application](const QString &profileName) {
                              const QString executable = QCoreApplication::applicationFilePath();
