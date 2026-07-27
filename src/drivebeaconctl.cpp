@@ -95,7 +95,17 @@ int callServiceMethod(const QString &method, const QVariantList &arguments = {})
     if (reply.type() == QDBusMessage::ErrorMessage) {
         return printError(reply.errorMessage());
     }
-    QTextStream(stdout) << "Requested " << method << "." << Qt::endl;
+    const QList<QVariant> values = reply.arguments();
+    if (values.isEmpty() || !values.first().canConvert<QVariantMap>()) {
+        return printError(QStringLiteral("Service returned no operation result."));
+    }
+    const QVariantMap result = values.first().toMap();
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+        return printError(result.value(QStringLiteral("message"))
+                              .toString());
+    }
+    QTextStream(stdout) << result.value(QStringLiteral("message")).toString()
+                        << Qt::endl;
     return 0;
 }
 

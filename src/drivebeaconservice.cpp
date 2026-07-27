@@ -12,6 +12,12 @@
 
 namespace {
 
+/** Encodes immediate D-Bus command acceptance for CLI and tray clients. */
+QVariantMap operationResult(bool ok, const QString &message = {})
+{
+    return {{QStringLiteral("ok"), ok}, {QStringLiteral("message"), message}};
+}
+
 /** Returns the application data root without embedding a vendor namespace. */
 QString driveBeaconDataRoot()
 {
@@ -52,7 +58,7 @@ DriveBeaconService::~DriveBeaconService()
     }
 }
 
-void DriveBeaconService::reloadProfiles()
+QVariantMap DriveBeaconService::reloadProfiles()
 {
     const bool globallyEnabled = m_profileStore.globalSyncEnabled();
     const QStringList configuredProfileNames = m_profileStore.profileNames();
@@ -129,6 +135,7 @@ void DriveBeaconService::reloadProfiles()
         m_activeProfileName = m_profileStore.activeProfileName();
     }
     Q_EMIT statusChanged();
+    return operationResult(true, QStringLiteral("Profiles reloaded."));
 }
 
 OneDriveController *DriveBeaconService::activeController() const
@@ -195,43 +202,61 @@ QVariantList DriveBeaconService::remoteEntries(const QString &profileName) const
     return {};
 }
 
-void DriveBeaconService::materializeFile(const QString &profileName,
-                                         const QString &relativePath)
+QVariantMap DriveBeaconService::materializeFile(const QString &profileName,
+                                                const QString &relativePath)
 {
-    if (auto *controller = m_controllers.value(profileName.trimmed(), nullptr)) {
-        controller->materializeGraphFile(relativePath);
+    auto *controller = m_controllers.value(profileName.trimmed(), nullptr);
+    if (!controller) {
+        return operationResult(false, QStringLiteral("Profile is not loaded."));
     }
+    if (relativePath.trimmed().isEmpty()) {
+        return operationResult(false, QStringLiteral("A relative path is required."));
+    }
+    controller->materializeGraphFile(relativePath);
+    return operationResult(true, QStringLiteral("Materialization queued."));
 }
 
-void DriveBeaconService::keepLocalPath(const QString &profileName,
-                                       const QString &relativePath)
+QVariantMap DriveBeaconService::keepLocalPath(const QString &profileName,
+                                              const QString &relativePath)
 {
-    if (auto *controller = m_controllers.value(profileName.trimmed(), nullptr)) {
-        controller->setGraphPathPolicy(relativePath, QStringLiteral("keep-local"));
+    auto *controller = m_controllers.value(profileName.trimmed(), nullptr);
+    if (!controller) {
+        return operationResult(false, QStringLiteral("Profile is not loaded."));
     }
+    if (relativePath.trimmed().isEmpty()) {
+        return operationResult(false, QStringLiteral("A relative path is required."));
+    }
+    controller->setGraphPathPolicy(relativePath, QStringLiteral("keep-local"));
+    return operationResult(true, QStringLiteral("Keep Local applied."));
 }
 
-void DriveBeaconService::evictPath(const QString &profileName,
-                                   const QString &relativePath)
+QVariantMap DriveBeaconService::evictPath(const QString &profileName,
+                                          const QString &relativePath)
 {
-    if (auto *controller = m_controllers.value(profileName.trimmed(), nullptr)) {
-        controller->evictGraphPath(relativePath);
+    auto *controller = m_controllers.value(profileName.trimmed(), nullptr);
+    if (!controller) {
+        return operationResult(false, QStringLiteral("Profile is not loaded."));
     }
+    if (relativePath.trimmed().isEmpty()) {
+        return operationResult(false, QStringLiteral("A relative path is required."));
+    }
+    controller->evictGraphPath(relativePath);
+    return operationResult(true, QStringLiteral("Local cache release queued."));
 }
 
-void DriveBeaconService::mountProfile(const QString &profileName)
+QVariantMap DriveBeaconService::mountProfile(const QString &profileName)
 {
     const QString name = profileName.trimmed();
     if (name.isEmpty() || m_fuseProcesses.contains(name)) {
         qWarning().noquote() << "DriveBeacon FUSE mount skipped for" << name
                              << "because the profile is empty or already mounted";
-        return;
+        return operationResult(false, QStringLiteral("Profile is empty or already mounted."));
     }
     auto *controller = m_controllers.value(name, nullptr);
     if (!controller || !controller->graphAuthenticated()) {
         qWarning().noquote() << "DriveBeacon FUSE mount rejected for" << name
                              << "because the Graph profile is not loaded or authenticated";
-        return;
+        return operationResult(false, QStringLiteral("Profile is not loaded or authenticated."));
     }
     const QVariantMap status = profileStatus(name);
     const QString mountPoint = status.value(QStringLiteral("mountPoint")).toString();
@@ -240,7 +265,7 @@ void DriveBeaconService::mountProfile(const QString &profileName)
         qWarning().noquote() << "DriveBeacon FUSE mount rejected for" << name
                              << "because mount/cache paths are invalid"
                              << mountPoint << backingDirectory;
-        return;
+        return operationResult(false, QStringLiteral("Mount/cache paths are invalid."));
     }
     if (!QDir().mkpath(mountPoint)) {
         // A previous helper can leave a disconnected FUSE endpoint after a
@@ -255,7 +280,7 @@ void DriveBeaconService::mountProfile(const QString &profileName)
         qWarning().noquote() << "DriveBeacon FUSE mount rejected for" << name
                              << "because mount/cache paths are invalid"
                              << mountPoint << backingDirectory;
-        return;
+        return operationResult(false, QStringLiteral("Mount/cache paths are invalid."));
     }
     QString helper = QDir(QCoreApplication::applicationDirPath()).filePath(
         QStringLiteral("drivebeacon-fs"));
@@ -265,7 +290,7 @@ void DriveBeaconService::mountProfile(const QString &profileName)
     if (helper.isEmpty()) {
         qWarning().noquote() << "DriveBeacon FUSE mount rejected for" << name
                              << "because drivebeacon-fs was not found";
-        return;
+        return operationResult(false, QStringLiteral("drivebeacon-fs was not found."));
     }
     auto *process = new QProcess(this);
     // Keep libfuse diagnostics in the service journal. This is especially
@@ -297,14 +322,15 @@ void DriveBeaconService::mountProfile(const QString &profileName)
     m_fuseProcesses.insert(name, process);
     process->start();
     Q_EMIT statusChanged();
+    return operationResult(true, QStringLiteral("FUSE mount requested."));
 }
 
-void DriveBeaconService::unmountProfile(const QString &profileName)
+QVariantMap DriveBeaconService::unmountProfile(const QString &profileName)
 {
     const QString name = profileName.trimmed();
     auto *process = m_fuseProcesses.value(name, nullptr);
     if (!process) {
-        return;
+        return operationResult(false, QStringLiteral("Profile is not mounted."));
     }
     const QString mountPoint = profileStatus(name).value(QStringLiteral("mountPoint")).toString();
     const QString fusermount = QStandardPaths::findExecutable(QStringLiteral("fusermount3"));
@@ -327,6 +353,7 @@ void DriveBeaconService::unmountProfile(const QString &profileName)
     m_fuseProcesses.remove(name);
     process->deleteLater();
     Q_EMIT statusChanged();
+    return operationResult(true, QStringLiteral("FUSE unmount requested."));
 }
 
 QString DriveBeaconService::syncStatus() const
@@ -359,49 +386,64 @@ bool DriveBeaconService::globalSyncEnabled() const
     return m_profileStore.globalSyncEnabled();
 }
 
-void DriveBeaconService::synchronizeGraph()
+QVariantMap DriveBeaconService::synchronizeGraph()
 {
-    if (auto *controller = activeController()) {
-        controller->synchronizeGraph();
+    auto *controller = activeController();
+    if (!controller) {
+        return operationResult(false, QStringLiteral("No active Graph profile is loaded."));
     }
+    controller->synchronizeGraph();
+    return operationResult(true, QStringLiteral("Synchronization requested."));
 }
 
-void DriveBeaconService::forceRemoteResync(const QString &profileName)
+QVariantMap DriveBeaconService::forceRemoteResync(const QString &profileName)
 {
-    if (auto *controller = m_controllers.value(profileName.trimmed(), nullptr)) {
-        controller->forceRemoteResync();
+    auto *controller = m_controllers.value(profileName.trimmed(), nullptr);
+    if (!controller) {
+        return operationResult(false, QStringLiteral("Profile is not loaded."));
     }
+    controller->forceRemoteResync();
+    return operationResult(true, QStringLiteral("Remote resynchronization requested."));
 }
 
-void DriveBeaconService::refreshGraphFolders()
+QVariantMap DriveBeaconService::refreshGraphFolders()
 {
-    if (auto *controller = activeController()) {
-        controller->refreshGraphFolders();
+    auto *controller = activeController();
+    if (!controller) {
+        return operationResult(false, QStringLiteral("No active Graph profile is loaded."));
     }
+    controller->refreshGraphFolders();
+    return operationResult(true, QStringLiteral("Folder refresh requested."));
 }
 
-void DriveBeaconService::setProfileSyncEnabled(const QString &profileName, bool enabled)
+QVariantMap DriveBeaconService::setProfileSyncEnabled(const QString &profileName, bool enabled)
 {
-    if (auto *controller = m_controllers.value(profileName.trimmed(), nullptr)) {
-        controller->setGraphSyncEnabled(enabled);
-        publishStatus();
+    auto *controller = m_controllers.value(profileName.trimmed(), nullptr);
+    if (!controller) {
+        return operationResult(false, QStringLiteral("Profile is not loaded."));
     }
+    controller->setGraphSyncEnabled(enabled);
+    publishStatus();
+    return operationResult(true, enabled ? QStringLiteral("Profile resumed.")
+                                         : QStringLiteral("Profile paused."));
 }
 
-void DriveBeaconService::setGlobalSyncEnabled(bool enabled)
+QVariantMap DriveBeaconService::setGlobalSyncEnabled(bool enabled)
 {
     m_profileStore.setGlobalSyncEnabled(enabled);
     for (auto *controller : m_controllers) {
         controller->setGlobalGraphSyncEnabled(enabled);
     }
     publishStatus();
+    return operationResult(true, enabled ? QStringLiteral("Global synchronization resumed.")
+                                         : QStringLiteral("Global synchronization paused."));
 }
 
-void DriveBeaconService::setPrimaryProfile(const QString &profileName)
+QVariantMap DriveBeaconService::setPrimaryProfile(const QString &profileName)
 {
     const QString name = profileName.trimmed();
     if (!m_controllers.contains(name)) {
-        return;
+        return operationResult(false, QStringLiteral("Profile is not loaded."));
     }
     // The primary account is a presentation preference, not a synchronization
     // switch; changing it must not restart controllers or reset their state.
@@ -409,6 +451,7 @@ void DriveBeaconService::setPrimaryProfile(const QString &profileName)
     m_requestedProfileName.clear();
     m_profileStore.setActiveProfileName(name);
     Q_EMIT statusChanged();
+    return operationResult(true, QStringLiteral("Primary profile changed."));
 }
 
 void DriveBeaconService::publishStatus()

@@ -51,34 +51,34 @@ public:
     [[nodiscard]] bool globalSyncEnabled() const;
 
 public Q_SLOTS:
-    /** Requests an immediate Graph synchronization pass. */
-    void synchronizeGraph();
+    /** Requests an immediate Graph pass and returns its acceptance result. */
+    QVariantMap synchronizeGraph();
     /** Rebuilds one profile's selected local tree from the remote drive. */
-    void forceRemoteResync(const QString &profileName);
+    QVariantMap forceRemoteResync(const QString &profileName);
     /** Requests a fresh first-level folder listing. */
-    void refreshGraphFolders();
+    QVariantMap refreshGraphFolders();
     /** Enables or pauses one named Graph profile without deleting its state. */
-    void setProfileSyncEnabled(const QString &profileName, bool enabled);
+    QVariantMap setProfileSyncEnabled(const QString &profileName, bool enabled);
     /** Pauses or resumes all Graph profiles while preserving their own flags. */
-    void setGlobalSyncEnabled(bool enabled);
+    QVariantMap setGlobalSyncEnabled(bool enabled);
     /** Discovers newly saved Graph profiles without restarting the service. */
-    void reloadProfiles();
+    QVariantMap reloadProfiles();
     /** Persists the account whose summary is shown in the tray header. */
-    void setPrimaryProfile(const QString &profileName);
+    QVariantMap setPrimaryProfile(const QString &profileName);
     /** Returns status fields for one loaded profile for CLI and tray clients. */
     Q_INVOKABLE QVariantMap profileStatus(const QString &profileName) const;
     /** Returns remote path metadata cached by one Graph controller. */
     Q_INVOKABLE QVariantList remoteEntries(const QString &profileName) const;
     /** Requests content for one remote-only/on-demand path. */
-    void materializeFile(const QString &profileName, const QString &relativePath);
+    QVariantMap materializeFile(const QString &profileName, const QString &relativePath);
     /** Marks one file/folder KeepLocal and materializes folder descendants. */
-    void keepLocalPath(const QString &profileName, const QString &relativePath);
+    QVariantMap keepLocalPath(const QString &profileName, const QString &relativePath);
     /** Releases one cached file or folder without changing remote content. */
-    void evictPath(const QString &profileName, const QString &relativePath);
+    QVariantMap evictPath(const QString &profileName, const QString &relativePath);
     /** Mounts one profile's read-only FUSE view at its configured user path. */
-    void mountProfile(const QString &profileName);
+    QVariantMap mountProfile(const QString &profileName);
     /** Unmounts one profile without changing synchronization or remote state. */
-    void unmountProfile(const QString &profileName);
+    QVariantMap unmountProfile(const QString &profileName);
 Q_SIGNALS:
     /** Emitted when status, progress, or authentication changes. */
     void statusChanged();

@@ -60,6 +60,10 @@ public Q_SLOTS:
     void setProfileSyncEnabled(const QString &profileName, bool enabled);
     /** Releases one cached file or folder without changing remote content. */
     void evictPath(const QString &profileName, const QString &relativePath);
+    /** Queues materialization of one remote-only path and reports failures. */
+    void materializeFile(const QString &profileName, const QString &relativePath);
+    /** Applies Keep Local to one path and reports failures. */
+    void keepLocalPath(const QString &profileName, const QString &relativePath);
     /** Pauses or resumes all profiles through the service. */
     void setGlobalSyncEnabled(bool enabled);
     /** Requests discovery of profiles saved after the service started. */

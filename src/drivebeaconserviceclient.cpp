@@ -153,6 +153,18 @@ void DriveBeaconServiceClient::evictPath(const QString &profileName,
     call(QStringLiteral("evictPath"), {profileName, relativePath});
 }
 
+void DriveBeaconServiceClient::materializeFile(const QString &profileName,
+                                               const QString &relativePath)
+{
+    call(QStringLiteral("materializeFile"), {profileName, relativePath});
+}
+
+void DriveBeaconServiceClient::keepLocalPath(const QString &profileName,
+                                             const QString &relativePath)
+{
+    call(QStringLiteral("keepLocalPath"), {profileName, relativePath});
+}
+
 void DriveBeaconServiceClient::setGlobalSyncEnabled(bool enabled)
 {
     call(QStringLiteral("setGlobalSyncEnabled"), {enabled});
@@ -199,9 +211,14 @@ void DriveBeaconServiceClient::call(const QString &method, const QVariantList &a
     auto *watcher = new QDBusPendingCallWatcher(
         service.asyncCallWithArgumentList(method, arguments), this);
     connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, watcher] {
-        const QDBusPendingReply<> reply = *watcher;
+        // Every mutating service method returns {ok, message}; transport
+        // errors and rejected validation therefore reach the tray uniformly.
+        const QDBusPendingReply<QVariantMap> reply = *watcher;
         if (reply.isError()) {
             Q_EMIT errorOccurred(reply.error().message());
+        } else if (!reply.value().value(QStringLiteral("ok")).toBool()) {
+            Q_EMIT errorOccurred(reply.value().value(QStringLiteral("message"))
+                                     .toString());
         }
         watcher->deleteLater();
     });
