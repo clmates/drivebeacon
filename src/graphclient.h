@@ -151,6 +151,8 @@ Q_SIGNALS:
     void rootFoldersReceived(const QList<GraphRemoteFolder> &folders);
     /** Emitted for transport, authentication, or malformed-response failures. */
     void errorOccurred(const QString &message);
+    /** Emitted for throttled requests with the provider's requested delay. */
+    void retryableError(int retryAfterSeconds, const QString &message);
     /** Reports remote-to-local synchronization progress and the current path. */
     void syncProgress(int percent, const QString &relativePath);
     /** Emitted after all queued remote files have been downloaded. */
@@ -176,6 +178,8 @@ private:
     void log(const QString &message);
     /** Sends a diagnostic to stdout and journald without creating a tray row. */
     void logProgress(const QString &message);
+    /** Reports an HTTP failure and extracts Graph throttling metadata. */
+    [[nodiscard]] QString networkError(QNetworkReply *reply, const QString &fallback);
     /** Continues the breadth-first remote folder enumeration. */
     void processNextFolder();
     /** Continues the queued remote file downloads. */

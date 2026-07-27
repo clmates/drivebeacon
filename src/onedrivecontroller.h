@@ -12,7 +12,9 @@
 #include "systemdmanager.h"
 
 #include <QObject>
+#include <QDateTime>
 #include <QProcess>
+#include <QTimer>
 #include <QVariantList>
 
 /** QML-facing coordinator for service control, configuration, and activity history. */
@@ -176,11 +178,23 @@ private:
     void startJournalBackend();
     /** Stores a journal error and notifies QML when it changes. */
     void setJournalError(const QString &message);
+    /** Schedules renewal before the provider-reported bearer lifetime ends. */
+    void scheduleGraphTokenRefresh(int expiresInSeconds);
+    /** Exchanges the in-memory refresh token for a new bearer token. */
+    void refreshGraphAccessToken();
+    /** Refreshes once after an unauthorized Graph response, with a cooldown. */
+    [[nodiscard]] bool retryGraphAuthentication(const QString &message);
+    /** Schedules a non-destructive synchronization retry after throttling. */
+    void scheduleGraphRetry(int retryAfterSeconds);
+    /** Re-enters the remote comparison after the throttling delay expires. */
+    void retryGraphSynchronization();
 
     ActivityModel m_activities;
     ProfileStore m_profileStore;
     SyncProfile m_profile;
     DeviceLoginAuth m_graphAuth;
+    QTimer m_graphTokenRefreshTimer;
+    QTimer m_graphRetryTimer;
     GraphClient m_graphClient;
     JournalReader m_journalReader;
     SystemdManager m_systemdManager;
@@ -204,4 +218,7 @@ private:
     bool m_graphSyncEnabled = true;
     /** True when a force-remote request waits for current transfers to finish. */
     bool m_forceRemoteResyncPending = false;
+    /** Prevents repeated 401 responses from starting an unbounded refresh loop. */
+    QDateTime m_lastUnauthorizedRefresh;
+    int m_graphRetryAttempt = 0;
 };

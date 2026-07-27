@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "graphclient.h"
+#include "graphretrypolicy.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -188,7 +189,7 @@ GraphClient::GraphClient(QObject *parent)
         connect(reply, &QNetworkReply::finished, this, [this, reply] {
             const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
             if (reply->error() != QNetworkReply::NoError) {
-                Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not query remote changes.")));
+                Q_EMIT errorOccurred(networkError(reply, QStringLiteral("Could not query remote changes.")));
                 return;
             }
             QJsonParseError parseError;
@@ -444,6 +445,16 @@ void GraphClient::logProgress(const QString &message)
     // tray process after synchronization was decoupled from the UI.
     graphLog(message);
     Q_EMIT logMessage(message);
+}
+
+QString GraphClient::networkError(QNetworkReply *reply, const QString &fallback)
+{
+    const QString message = graphError(reply, fallback);
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (status == 429) {
+        Q_EMIT retryableError(graphRetryAfterSeconds(reply->rawHeader("Retry-After")), message);
+    }
+    return message;
 }
 
 void GraphClient::startRemoteMonitoring(const QString &driveId, const QString &accessToken,
@@ -851,7 +862,7 @@ void GraphClient::materializeFile(const QString &relativePath)
         connect(reply, &QNetworkReply::finished, this, [this, reply, normalized, itemId] {
             const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
             if (reply->error() != QNetworkReply::NoError) {
-                Q_EMIT errorOccurred(graphError(reply,
+                Q_EMIT errorOccurred(networkError(reply,
                                                  QStringLiteral("Could not inspect remote item.")));
                 return;
             }
@@ -1004,7 +1015,7 @@ void GraphClient::fetchQuota(const QString &driveId, const QString &accessToken)
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
         const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
         if (reply->error() != QNetworkReply::NoError) {
-            Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not read drive quota.")));
+            Q_EMIT errorOccurred(networkError(reply, QStringLiteral("Could not read drive quota.")));
             return;
         }
 
@@ -1038,7 +1049,7 @@ void GraphClient::fetchCurrentDrive(const QString &accessToken)
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
         const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
         if (reply->error() != QNetworkReply::NoError) {
-            Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not discover the current drive.")));
+            Q_EMIT errorOccurred(networkError(reply, QStringLiteral("Could not discover the current drive.")));
             return;
         }
 
@@ -1078,7 +1089,7 @@ void GraphClient::fetchRootFolders(const QString &driveId, const QString &access
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
         const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
         if (reply->error() != QNetworkReply::NoError) {
-            Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not list remote folders.")));
+            Q_EMIT errorOccurred(networkError(reply, QStringLiteral("Could not list remote folders.")));
             return;
         }
         QJsonParseError parseError;
@@ -1210,7 +1221,7 @@ void GraphClient::processNextFolder()
     connect(reply, &QNetworkReply::finished, this, [this, reply, folder, displayPath] {
         const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
         if (reply->error() != QNetworkReply::NoError) {
-            Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not read a remote folder.")));
+            Q_EMIT errorOccurred(networkError(reply, QStringLiteral("Could not read a remote folder.")));
             return;
         }
         QJsonParseError parseError;
@@ -1296,7 +1307,7 @@ void GraphClient::processNextFolder()
                     [this, nextReply, folder] {
                 const auto cleanup = qScopeGuard([nextReply] { nextReply->deleteLater(); });
                 if (nextReply->error() != QNetworkReply::NoError) {
-                    Q_EMIT errorOccurred(graphError(
+                    Q_EMIT errorOccurred(networkError(
                         nextReply, QStringLiteral("Could not read the next remote folder page.")));
                     return;
                 }
@@ -1595,7 +1606,7 @@ void GraphClient::processDownloadedReply(QNetworkReply *reply,
         m_deltaPageFailed = true;
         m_pendingDeltaLink.clear();
         m_activeDownloads.remove(transfer->file.relativePath);
-        Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not download a remote file.")));
+            Q_EMIT errorOccurred(networkError(reply, QStringLiteral("Could not download a remote file.")));
         processNextFile();
         return;
     }
@@ -1760,7 +1771,7 @@ void GraphClient::renameNextRemoteFile()
         if (reply->error() != QNetworkReply::NoError) {
             m_pendingRemoteRenamePaths.remove(rename.oldPath);
             m_pendingRemoteRenamePaths.remove(rename.newPath);
-            Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not rename remote file: %1")
+            Q_EMIT errorOccurred(networkError(reply, QStringLiteral("Could not rename remote file: %1")
                                              .arg(rename.oldPath)));
         } else {
             log(QStringLiteral("Graph sync: renamed remote %1 → %2")
@@ -1829,7 +1840,7 @@ void GraphClient::deleteNextRemoteFile()
                 return;
             }
             m_pendingRemoteDeletePaths.remove(file.relativePath);
-            Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not delete remote file: %1")
+            Q_EMIT errorOccurred(networkError(reply, QStringLiteral("Could not delete remote file: %1")
                                              .arg(file.relativePath)));
         } else {
             log(QStringLiteral("Graph sync: deleted remote %1").arg(file.relativePath));
@@ -1942,7 +1953,7 @@ void GraphClient::startUpload(const GraphLocalFile &file)
         if (reply->error() != QNetworkReply::NoError) {
             m_localSignatures.remove(transfer->file.relativePath);
             m_localMetadata.remove(transfer->file.relativePath);
-            Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not upload local file: %1")
+            Q_EMIT errorOccurred(networkError(reply, QStringLiteral("Could not upload local file: %1")
                                              .arg(transfer->file.relativePath)));
             m_activeUploads.remove(transfer->file.relativePath);
             uploadNextLocalFile();
@@ -1970,7 +1981,7 @@ void GraphClient::createUploadSession(const std::shared_ptr<UploadTransfer> &tra
     connect(reply, &QNetworkReply::finished, this, [this, reply, transfer] {
         const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
         if (reply->error() != QNetworkReply::NoError) {
-            Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not create upload session: %1")
+            Q_EMIT errorOccurred(networkError(reply, QStringLiteral("Could not create upload session: %1")
                                              .arg(transfer->file.relativePath)));
             m_activeUploads.remove(transfer->file.relativePath);
             uploadNextLocalFile();
@@ -2041,7 +2052,7 @@ void GraphClient::uploadNextChunk(const std::shared_ptr<UploadTransfer> &transfe
         const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         if (reply->error() != QNetworkReply::NoError && status != 200 && status != 201) {
-            Q_EMIT errorOccurred(graphError(reply, QStringLiteral("Could not upload large file: %1")
+            Q_EMIT errorOccurred(networkError(reply, QStringLiteral("Could not upload large file: %1")
                                              .arg(transfer->file.relativePath)));
             m_activeUploads.remove(transfer->file.relativePath);
             uploadNextLocalFile();

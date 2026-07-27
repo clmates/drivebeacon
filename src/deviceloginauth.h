@@ -33,7 +33,7 @@ public:
     void submitAuthorizationResponse(const QString &responseUrl);
     /** Exchanges a stored refresh token for a new short-lived access token. */
     void refresh(const QString &clientId, const QString &refreshToken);
-    /** Stops polling and forgets the current device-code session. */
+    /** Cancels the active browser exchange and clears ephemeral session state. */
     void cancel();
 
 Q_SIGNALS:

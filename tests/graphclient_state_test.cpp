@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include "graphclient.h"
+#include "graphretrypolicy.h"
 
 #include <QCoreApplication>
 #include <QTemporaryDir>
@@ -20,6 +21,8 @@ private Q_SLOTS:
     void acceptsLegacyLocalBaseline();
     /** A KeepLocal folder policy must replace conflicting descendant policies. */
     void parentKeepLocalClearsDescendantReleasePolicy();
+    /** Retry-After values are bounded and support HTTP-date form. */
+    void parsesRetryAfterValues();
 };
 
 void GraphClientStateTest::roundTripsSeparateBaselines()
@@ -73,6 +76,17 @@ void GraphClientStateTest::parentKeepLocalClearsDescendantReleasePolicy()
     client.setPathPolicy(QStringLiteral("Documentos"), LocalAvailability::KeepLocal);
 
     QCOMPARE(client.pathPolicies(), QStringList({QStringLiteral("Documentos\tkeep-local")}));
+}
+
+void GraphClientStateTest::parsesRetryAfterValues()
+{
+    const QDateTime now = QDateTime::fromString(
+        QStringLiteral("Tue, 28 Jul 2026 12:00:00 +0000"), Qt::RFC2822Date);
+    QCOMPARE(graphRetryAfterSeconds(QByteArrayLiteral("17"), now), 17);
+    QCOMPARE(graphRetryAfterSeconds(QByteArrayLiteral("0"), now), 1);
+    QCOMPARE(graphRetryAfterSeconds(QByteArrayLiteral("99999"), now), 3600);
+    QCOMPARE(graphRetryAfterSeconds(QByteArrayLiteral("Tue, 28 Jul 2026 12:00:12 GMT"), now), 12);
+    QCOMPARE(graphRetryAfterSeconds(QByteArrayLiteral("invalid"), now), 5);
 }
 
 QTEST_MAIN(GraphClientStateTest)

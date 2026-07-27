@@ -15,6 +15,7 @@ target_sources(drivebeacon PRIVATE
     drivebeaconserviceclient.h
     graphclient.cpp
     graphclient.h
+    graphretrypolicy.h
     journalreader.cpp
     journalreader.h
     main.cpp
@@ -50,6 +51,7 @@ target_sources(drivebeacon-service PRIVATE
     drivebeaconservice.h
     graphclient.cpp
     graphclient.h
+    graphretrypolicy.h
     journalreader.cpp
     journalreader.h
     onedrivecontroller.cpp
