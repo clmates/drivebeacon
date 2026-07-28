@@ -117,6 +117,10 @@ QVariantMap DriveBeaconService::reloadProfiles()
                                                  controller->graphErrorMessage(),
                                                  controller->graphAuthorizationUrl());
                 });
+        connect(controller, &OneDriveController::graphRemoteFoldersChanged, this,
+                [this, name, controller] {
+                    Q_EMIT graphRemoteFoldersChanged(name, controller->graphRemoteFolders());
+                });
         // Mounts are service-owned runtime state, so a service restart drops
         // the helper process. Recreate the user's configured FUSE view as soon
         // as that profile has authenticated instead of requiring the tray to
@@ -534,6 +538,28 @@ QVariantMap DriveBeaconService::refreshGraphFolders()
     }
     controller->refreshGraphFolders();
     return operationResult(true, QStringLiteral("Folder refresh requested."));
+}
+
+QVariantMap DriveBeaconService::refreshGraphFoldersForProfile(const QString &profileName)
+{
+    const QString name = profileName.trimmed();
+    auto *controller = m_controllers.value(name, nullptr);
+    if (!controller) {
+        return operationResult(false, QStringLiteral("Profile is not loaded."));
+    }
+    if (!controller->graphAuthenticated()) {
+        return operationResult(false, QStringLiteral("Graph profile is not authenticated."));
+    }
+    controller->refreshGraphFolders();
+    return operationResult(true, QStringLiteral("Folder refresh requested."));
+}
+
+QStringList DriveBeaconService::graphRemoteFolders(const QString &profileName) const
+{
+    if (auto *controller = m_controllers.value(profileName.trimmed(), nullptr)) {
+        return controller->graphRemoteFolders();
+    }
+    return {};
 }
 
 QVariantMap DriveBeaconService::setProfileSyncEnabled(const QString &profileName, bool enabled)

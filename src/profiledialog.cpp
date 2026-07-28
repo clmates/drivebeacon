@@ -16,6 +16,7 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -112,12 +113,10 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     auto *newButton = new QPushButton(i18n("New"), this);
     auto *loadButton = new QPushButton(i18n("Load profile"), this);
     auto *saveButton = new QPushButton(i18n("Save"), this);
-    auto *useButton = new QPushButton(i18n("Use profile"), this);
     auto *deleteButton = new QPushButton(i18n("Delete profile"), this);
     profileButtons->addWidget(newButton);
     profileButtons->addWidget(loadButton);
     profileButtons->addWidget(saveButton);
-    profileButtons->addWidget(useButton);
     profileButtons->addWidget(deleteButton);
 
     auto *profileColumn = new QVBoxLayout;
@@ -174,7 +173,6 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     connect(newButton, &QPushButton::clicked, this, &ProfileDialog::createProfile);
     connect(loadButton, &QPushButton::clicked, this, &ProfileDialog::loadSelectedProfile);
     connect(saveButton, &QPushButton::clicked, this, &ProfileDialog::saveProfile);
-    connect(useButton, &QPushButton::clicked, this, &ProfileDialog::useProfile);
     connect(deleteButton, &QPushButton::clicked, this, &ProfileDialog::deleteProfile);
     connect(browseButton, &QPushButton::clicked, this, [this] {
     const QString directory = QFileDialog::getExistingDirectory(
@@ -253,14 +251,25 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
                     m_graphConnectionPending = false;
                 }
                 updateGraphStatus();
+                if (authenticated) {
+                    // The profile-status cache may lag behind this auth
+                    // signal, so request the folder listing directly instead
+                    // of filtering it through the old cached status.
+                    m_folderTree->clear();
+                    m_serviceClient->refreshGraphFolders(profileName);
+                }
             });
+    connect(m_serviceClient, &DriveBeaconServiceClient::graphRemoteFoldersChanged, this,
+            &ProfileDialog::updateSelectedServiceFolders);
     connect(m_serviceClient, &DriveBeaconServiceClient::profilesChanged, this,
             [this] {
-                // The service owns deletion and profile reloads. Refresh the
-                // editor list after it updates the shared settings file so a
-                // delete does not require closing and reopening the tray.
-                refreshProfileList(m_nameEdit->text().trimmed());
                 updateSelectedServiceProfileState();
+            });
+    connect(m_serviceClient, &DriveBeaconServiceClient::profileListChanged, this,
+            [this] {
+                // Only account additions/removals rebuild the profile list.
+                // Status and transfer updates must not reload the folder tree.
+                refreshProfileList(m_nameEdit->text().trimmed());
             });
     connect(m_folderTree, &QTreeWidget::itemChanged,
             this, &ProfileDialog::updateFolderSelection);
@@ -332,9 +341,11 @@ void ProfileDialog::loadProfile(const QString &name)
                                 ? QString::fromLatin1(kPackagedGraphClientId)
                                 : profile.graphClientId);
     m_driveIdEdit->setText(profile.remoteDriveId);
+    m_remoteFolders.clear();
+    m_displayedRemoteFolders.clear();
     updateSelectedServiceProfileState();
     updateGraphStatus();
-    populateRemoteFolders();
+    refreshRemoteFolders();
 }
 
 void ProfileDialog::createProfile()
@@ -437,16 +448,6 @@ void ProfileDialog::saveProfile()
                                       * 1024 * 1024);
     Q_EMIT profileSaved(name);
     refreshProfileList(name);
-}
-
-void ProfileDialog::useProfile()
-{
-    saveProfile();
-    const QString name = m_nameEdit->text().trimmed();
-    if (!name.isEmpty()) {
-        m_store->setActiveProfileName(name);
-        Q_EMIT useProfileRequested(name);
-    }
 }
 
 void ProfileDialog::deleteProfile()
@@ -557,28 +558,60 @@ void ProfileDialog::updateSelectedServiceProfileState()
 
 void ProfileDialog::refreshRemoteFolders()
 {
-    if (!m_controller->graphAuthenticated()) {
+    const QString profileName = m_nameEdit->text().trimmed();
+    if (profileName == m_controller->profileName()) {
+        if (!m_controller->graphAuthenticated()) {
+            return;
+        }
+        m_controller->refreshGraphFolders();
+        populateRemoteFolders();
         return;
     }
-    m_controller->refreshGraphFolders();
-    populateRemoteFolders();
+    const QVariantMap status = m_serviceClient->profileStatus(profileName);
+    if (!status.value(QStringLiteral("authenticated")).toBool()) {
+        return;
+    }
+    m_folderTree->clear();
+    m_serviceClient->refreshGraphFolders(profileName);
 }
 
 void ProfileDialog::populateRemoteFolders()
 {
-    if (!m_controller->graphAuthenticated()) {
+    const bool activeProfile = m_nameEdit->text().trimmed() == m_controller->profileName();
+    if ((activeProfile && !m_controller->graphAuthenticated())
+        || (!activeProfile && !m_remoteAuthenticated)) {
         return;
     }
     m_loadingFolders = true;
     const QStringList included = m_store->load(m_nameEdit->text().trimmed()).includedFolders;
     const QStringList excluded = m_store->load(m_nameEdit->text().trimmed()).excludedFolders;
     const QStringList pathPolicies = m_store->load(m_nameEdit->text().trimmed()).graphPathPolicies;
+    const QStringList folders = m_nameEdit->text().trimmed() == m_controller->profileName()
+        ? m_controller->graphRemoteFolders() : m_remoteFolders;
+    if (folders == m_displayedRemoteFolders
+        && m_folderTree->topLevelItemCount() == folders.size()) {
+        return;
+    }
+    QHash<QString, QPair<Qt::CheckState, Qt::CheckState>> currentStates;
+    QHash<QString, QString> currentPolicies;
+    for (int index = 0; index < m_folderTree->topLevelItemCount(); ++index) {
+        auto *item = m_folderTree->topLevelItem(index);
+        currentStates.insert(item->text(0), {item->checkState(1), item->checkState(2)});
+        if (auto *policy = qobject_cast<QComboBox *>(m_folderTree->itemWidget(item, 3))) {
+            currentPolicies.insert(item->text(0), policy->currentData().toString());
+        }
+    }
     m_folderTree->clear();
-    for (const QString &folder : m_controller->graphRemoteFolders()) {
+    for (const QString &folder : folders) {
         auto *item = new QTreeWidgetItem(m_folderTree, {folder});
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-        item->setCheckState(1, included.contains(folder) ? Qt::Checked : Qt::Unchecked);
-        item->setCheckState(2, excluded.contains(folder) ? Qt::Checked : Qt::Unchecked);
+        const auto current = currentStates.constFind(folder);
+        item->setCheckState(1, current == currentStates.cend()
+                                  ? (included.contains(folder) ? Qt::Checked : Qt::Unchecked)
+                                  : current->first);
+        item->setCheckState(2, current == currentStates.cend()
+                                  ? (excluded.contains(folder) ? Qt::Checked : Qt::Unchecked)
+                                  : current->second);
         auto *policy = new QComboBox(m_folderTree);
         policy->addItem(i18n("Inherit default"), QStringLiteral("inherit"));
         policy->addItem(i18n("Keep local"), QStringLiteral("keep-local"));
@@ -591,9 +624,24 @@ void ProfileDialog::populateRemoteFolders()
                 break;
             }
         }
+        if (currentPolicies.contains(folder)) {
+            policy->setCurrentIndex(policy->findData(currentPolicies.value(folder)));
+        }
         m_folderTree->setItemWidget(item, 3, policy);
     }
+    m_displayedRemoteFolders = folders;
     m_loadingFolders = false;
+}
+
+void ProfileDialog::updateSelectedServiceFolders(const QString &profileName,
+                                                 const QStringList &folders)
+{
+    if (profileName != m_nameEdit->text().trimmed()
+        || profileName == m_controller->profileName()) {
+        return;
+    }
+    m_remoteFolders = folders;
+    populateRemoteFolders();
 }
 
 void ProfileDialog::updateFolderSelection(QTreeWidgetItem *item, int column)

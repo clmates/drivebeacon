@@ -61,6 +61,10 @@ public Q_SLOTS:
     QVariantMap forceRemoteResync(const QString &profileName);
     /** Requests a fresh first-level folder listing. */
     QVariantMap refreshGraphFolders();
+    /** Requests a fresh folder listing for a named profile. */
+    QVariantMap refreshGraphFoldersForProfile(const QString &profileName);
+    /** Returns the latest first-level folders for a named profile. */
+    Q_INVOKABLE QStringList graphRemoteFolders(const QString &profileName) const;
     /** Enables or pauses one named Graph profile without deleting its state. */
     QVariantMap setProfileSyncEnabled(const QString &profileName, bool enabled);
     /** Pauses or resumes all Graph profiles while preserving their own flags. */
@@ -99,6 +103,9 @@ Q_SIGNALS:
     void graphAuthStateChanged(const QString &profileName, bool authenticated,
                                const QString &errorMessage,
                                const QString &authorizationUrl);
+    /** Publishes first-level folders for the profile that requested them. */
+    void graphRemoteFoldersChanged(const QString &profileName,
+                                   const QStringList &folders);
 
 private:
     /** Forwards controller state changes without exposing Qt UI objects. */

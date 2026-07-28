@@ -31,8 +31,6 @@ public:
 Q_SIGNALS:
     /** Notifies the tray that a persisted profile must be reloaded by the service. */
     void profileSaved(const QString &profileName);
-    /** Requests relaunching DriveBeacon with the selected profile. */
-    void useProfileRequested(const QString &profileName);
     /** Requests service-owned removal of local profile state. */
     void profileDeleteRequested(const QString &profileName, bool deleteCache);
 
@@ -45,8 +43,6 @@ private Q_SLOTS:
     void loadSelectedProfile();
     /** Validates and persists the values currently shown by the editor. */
     void saveProfile();
-    /** Saves the profile and requests a relaunch using its isolated state. */
-    void useProfile();
     /** Confirms and requests deletion of the selected local profile. */
     void deleteProfile();
     /** Starts authentication for the active Graph profile. */
@@ -57,6 +53,9 @@ private Q_SLOTS:
     void updateGraphStatus();
     /** Applies authentication state reported for a non-active service profile. */
     void updateSelectedServiceProfileState();
+    /** Applies first-level folders returned for the selected service profile. */
+    void updateSelectedServiceFolders(const QString &profileName,
+                                      const QStringList &folders);
     /** Requests a fresh first-level folder listing from Graph. */
     void refreshRemoteFolders();
     /** Rebuilds the tree while preserving the profile's include/exclude policy. */
@@ -101,5 +100,7 @@ private:
     QString m_remoteAuthorizationUrl;
     bool m_remoteAuthenticated = false;
     QString m_remoteGraphError;
+    QStringList m_remoteFolders;
+    QStringList m_displayedRemoteFolders;
     bool m_loadingFolders = false;
 };

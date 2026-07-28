@@ -199,14 +199,6 @@ int main(int argc, char *argv[])
                                  serviceClient.deleteProfile(profileName, deleteCache);
                              }
                          });
-        QObject::connect(dialog, &ProfileDialog::useProfileRequested,
-                         &application, [dialog, &application](const QString &profileName) {
-                             const QString executable = QCoreApplication::applicationFilePath();
-                             QProcess::startDetached(executable, {QStringLiteral("--profile"), profileName});
-                             dialog->close();
-                             dialog->deleteLater();
-                             application.quit();
-                         });
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->show();
         dialog->raise();

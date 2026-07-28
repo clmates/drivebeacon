@@ -60,6 +60,8 @@ public Q_SLOTS:
     void forceRemoteResync(const QString &profileName);
     /** Requests a non-destructive remote folder refresh. */
     void refreshGraphFolders();
+    /** Requests folder discovery for a profile that is not the tray primary. */
+    void refreshGraphFolders(const QString &profileName);
     /** Pauses or resumes one named profile through the service. */
     void setProfileSyncEnabled(const QString &profileName, bool enabled);
     /** Releases one cached file or folder without changing remote content. */
@@ -88,6 +90,8 @@ Q_SIGNALS:
     void statusChanged();
     /** Emitted when the service adds or removes a loaded profile. */
     void profilesChanged();
+    /** Emitted only when the set of loaded profile names changes. */
+    void profileListChanged();
     /** Emitted when an action cannot be sent to the service. */
     void errorOccurred(const QString &message);
     /** Emitted for synchronization log messages forwarded by the service. */
@@ -99,6 +103,9 @@ Q_SIGNALS:
     void graphAuthStateChanged(const QString &profileName, bool authenticated,
                                const QString &errorMessage,
                                const QString &authorizationUrl);
+    /** Emitted when the service returns first-level folders for one profile. */
+    void graphRemoteFoldersChanged(const QString &profileName,
+                                   const QStringList &folders);
 
 private Q_SLOTS:
     /** Re-reads properties after the service emits its status signal. */
@@ -109,6 +116,9 @@ private Q_SLOTS:
     void onRemoteGraphAuthStateChanged(const QString &profileName, bool authenticated,
                                        const QString &errorMessage,
                                        const QString &authorizationUrl);
+    /** Receives first-level folders discovered for one service profile. */
+    void onRemoteGraphFoldersChanged(const QString &profileName,
+                                     const QStringList &folders);
 
 private:
     /** Calls a service method and reports D-Bus errors to the tray. */

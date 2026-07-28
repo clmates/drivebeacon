@@ -30,6 +30,9 @@ DriveBeaconServiceClient::DriveBeaconServiceClient(QObject *parent)
     connection.connect(serviceName, objectPath, interfaceName,
                        QStringLiteral("graphAuthStateChanged"), this,
                        SLOT(onRemoteGraphAuthStateChanged(QString,bool,QString,QString)));
+    connection.connect(serviceName, objectPath, interfaceName,
+                       QStringLiteral("graphRemoteFoldersChanged"), this,
+                       SLOT(onRemoteGraphFoldersChanged(QString,QStringList)));
     auto *watcher = new QDBusServiceWatcher(
         serviceName, connection,
         QDBusServiceWatcher::WatchForRegistration
@@ -112,6 +115,7 @@ void DriveBeaconServiceClient::refresh()
         m_profileStatuses.clear();
         Q_EMIT statusChanged();
         Q_EMIT profilesChanged();
+        Q_EMIT profileListChanged();
         return;
     }
 
@@ -178,6 +182,11 @@ void DriveBeaconServiceClient::forceRemoteResync(const QString &profileName)
 void DriveBeaconServiceClient::refreshGraphFolders()
 {
     call(QStringLiteral("refreshGraphFolders"));
+}
+
+void DriveBeaconServiceClient::refreshGraphFolders(const QString &profileName)
+{
+    call(QStringLiteral("refreshGraphFoldersForProfile"), {profileName});
 }
 
 void DriveBeaconServiceClient::setProfileSyncEnabled(const QString &profileName, bool enabled)
@@ -250,6 +259,12 @@ void DriveBeaconServiceClient::onRemoteGraphAuthStateChanged(
     Q_EMIT graphAuthStateChanged(profileName, authenticated, errorMessage, authorizationUrl);
 }
 
+void DriveBeaconServiceClient::onRemoteGraphFoldersChanged(const QString &profileName,
+                                                           const QStringList &folders)
+{
+    Q_EMIT graphRemoteFoldersChanged(profileName, folders);
+}
+
 void DriveBeaconServiceClient::call(const QString &method, const QVariantList &arguments)
 {
     if (!m_available) {
@@ -303,6 +318,7 @@ void DriveBeaconServiceClient::applyProperties(const QVariantMap &properties)
         m_graphProfiles = profiles;
         m_profileStatuses.clear();
         Q_EMIT profilesChanged();
+        Q_EMIT profileListChanged();
     }
     Q_EMIT statusChanged();
     refreshProfileStatuses();
