@@ -17,6 +17,8 @@ struct DriveBeaconMountState
     QString mountDirectory;
     QStringList placeholderPaths;
     QStringList localSignatures;
+    /** Relative path policies used to derive inherited folder state. */
+    QStringList pathPolicies;
 };
 
 /**
@@ -50,11 +52,34 @@ inline QList<DriveBeaconMountState> driveBeaconMountStates()
                              settings.value(QStringLiteral("graphPlaceholderPaths"))
                                  .toStringList(),
                              settings.value(QStringLiteral("graphLocalSignatures"))
+                                 .toStringList(),
+                             settings.value(QStringLiteral("graphPathPolicies"))
                                  .toStringList()});
         }
         settings.endGroup();
     }
     return profiles;
+}
+
+/** Returns the nearest persisted policy, allowing folder rules to inherit. */
+inline QString driveBeaconPathPolicy(const DriveBeaconMountState &profile,
+                                     QString path)
+{
+    path = QDir::cleanPath(path);
+    while (!path.isEmpty() && path != QLatin1String(".")) {
+        for (const QString &record : profile.pathPolicies) {
+            const int separator = record.indexOf(QLatin1Char('\t'));
+            if (separator > 0 && record.left(separator) == path) {
+                return record.sliced(separator + 1);
+            }
+        }
+        const int separator = path.lastIndexOf(QLatin1Char('/'));
+        if (separator < 0) {
+            break;
+        }
+        path.truncate(separator);
+    }
+    return {};
 }
 
 /** Converts a local URL into a path relative to one configured mount. */

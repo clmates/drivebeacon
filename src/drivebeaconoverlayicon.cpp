@@ -27,9 +27,17 @@ public:
             if (profile.placeholderPaths.contains(path)) {
                 return {QStringLiteral("cloud-download")};
             }
+            const QString policy = driveBeaconPathPolicy(profile, path);
+            if (policy == QLatin1String("remote-only")
+                || policy == QLatin1String("on-demand")) {
+                return {QStringLiteral("cloud-download")};
+            }
+            if (policy == QLatin1String("keep-local")) {
+                return {QStringLiteral("emblem-mounted")};
+            }
             for (const QString &signature : profile.localSignatures) {
                 if (signature.startsWith(path + QLatin1Char('\t'))) {
-                    return {QStringLiteral("emblem-synchronized")};
+                    return {QStringLiteral("emblem-mounted")};
                 }
             }
         }

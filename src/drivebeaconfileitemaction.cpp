@@ -46,6 +46,16 @@ QString pathState(const DriveBeaconMountState &profile, const QString &path)
     if (profile.placeholderPaths.contains(path)) {
         return i18n("Remote-only placeholder");
     }
+    const QString policy = driveBeaconPathPolicy(profile, path);
+    if (policy == QLatin1String("keep-local")) {
+        return i18n("Keep Local policy");
+    }
+    if (policy == QLatin1String("remote-only")) {
+        return i18n("Remote-only policy");
+    }
+    if (policy == QLatin1String("on-demand")) {
+        return i18n("On-demand policy");
+    }
     for (const QString &signature : profile.localSignatures) {
         if (signature.startsWith(path + QLatin1Char('\t'))) {
             return i18n("Cached locally");
@@ -112,7 +122,7 @@ public:
         // Both actions are available for files and folders. Keep Local on a
         // folder queues all descendants, while a file is fetched by the
         // explicit Keep Local action or when it is actually opened.
-        auto *keepLocal = new QAction(QIcon::fromTheme(QStringLiteral("emblem-synchronized")),
+    auto *keepLocal = new QAction(QIcon::fromTheme(QStringLiteral("emblem-mounted")),
                                       i18n("DriveBeacon – Keep Local"), this);
         keepLocal->setToolTip(i18n("Keep selected content in the local cache using profile %1 (%2)")
                                   .arg(matchedProfile->profileName, state));
