@@ -46,6 +46,8 @@ struct SyncProfile {
     int concurrentUploads = 2;
     /** Maximum simultaneous large transfers in either direction. */
     int concurrentLargeTransfers = 1;
+    /** Purge OnDemand content after this many unused days; zero disables it. */
+    int cacheEvictionDays = 0;
     /** Opaque Graph cursor resumed after restart; empty forces a baseline sync. */
     QString graphDeltaLink;
     /** Persisted `relativePath<TAB>sha256` local change baseline. */

@@ -79,6 +79,8 @@ SyncProfile ProfileStore::load(const QString &requestedName) const
         QStringLiteral("concurrentUploads"), profile.concurrentUploads).toInt(), 8);
     profile.concurrentLargeTransfers = qBound(1, settings.value(
         QStringLiteral("concurrentLargeTransfers"), profile.concurrentLargeTransfers).toInt(), 4);
+    profile.cacheEvictionDays = qBound(0, settings.value(
+        QStringLiteral("cacheEvictionDays"), profile.cacheEvictionDays).toInt(), 3650);
     profile.graphDeltaLink = settings.value(QStringLiteral("graphDeltaLink")).toString();
     profile.graphLocalSignatures = settings.value(QStringLiteral("graphLocalSignatures"))
                                        .toStringList();
@@ -127,6 +129,8 @@ void ProfileStore::save(const SyncProfile &profile)
     settings.setValue(QStringLiteral("concurrentUploads"), qBound(1, profile.concurrentUploads, 8));
     settings.setValue(QStringLiteral("concurrentLargeTransfers"),
                       qBound(1, profile.concurrentLargeTransfers, 4));
+    settings.setValue(QStringLiteral("cacheEvictionDays"),
+                      qBound(0, profile.cacheEvictionDays, 3650));
     settings.setValue(QStringLiteral("graphDeltaLink"), profile.graphDeltaLink);
     settings.setValue(QStringLiteral("graphLocalSignatures"), profile.graphLocalSignatures);
     settings.setValue(QStringLiteral("graphRemotePaths"), profile.graphRemotePaths);
@@ -148,10 +152,24 @@ bool ProfileStore::globalSyncEnabled() const
     return settings.value(QStringLiteral("profiles/globalSyncEnabled"), true).toBool();
 }
 
+qint64 ProfileStore::cacheMinimumFreeBytes() const
+{
+    QSettings settings = ProfileStore::settings();
+    return qMax<qint64>(0, settings.value(QStringLiteral("profiles/cacheMinimumFreeBytes"),
+                                          qint64(0)).toLongLong());
+}
+
 void ProfileStore::setGlobalSyncEnabled(bool enabled)
 {
     QSettings settings = ProfileStore::settings();
     settings.setValue(QStringLiteral("profiles/globalSyncEnabled"), enabled);
+    settings.sync();
+}
+
+void ProfileStore::setCacheMinimumFreeBytes(qint64 bytes)
+{
+    QSettings settings = ProfileStore::settings();
+    settings.setValue(QStringLiteral("profiles/cacheMinimumFreeBytes"), qMax<qint64>(0, bytes));
     settings.sync();
 }
 

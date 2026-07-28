@@ -44,6 +44,8 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     , m_concurrentDownloadsSpin(new QSpinBox(this))
     , m_concurrentUploadsSpin(new QSpinBox(this))
     , m_concurrentLargeTransfersSpin(new QSpinBox(this))
+    , m_cacheEvictionDaysSpin(new QSpinBox(this))
+    , m_globalCacheFreeSpin(new QSpinBox(this))
     , m_clientIdEdit(new QLineEdit(this))
     , m_clientIdHelpButton(new QPushButton(i18n("How to create one…"), this))
     , m_driveIdEdit(new QLineEdit(this))
@@ -77,6 +79,12 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     m_concurrentDownloadsSpin->setRange(1, 8);
     m_concurrentUploadsSpin->setRange(1, 8);
     m_concurrentLargeTransfersSpin->setRange(1, 4);
+    m_cacheEvictionDaysSpin->setRange(0, 3650);
+    m_cacheEvictionDaysSpin->setSuffix(i18n(" days"));
+    m_cacheEvictionDaysSpin->setSpecialValueText(i18n("Disabled"));
+    m_globalCacheFreeSpin->setRange(0, 1024 * 1024);
+    m_globalCacheFreeSpin->setSuffix(i18n(" MB free"));
+    m_globalCacheFreeSpin->setSpecialValueText(i18n("Disabled"));
     m_clientIdEdit->setToolTip(i18n(
         "A public Microsoft application client ID identifies DriveBeacon to Microsoft. "
         "It is not a password. Leave the packaged default unchanged unless you want to "
@@ -135,6 +143,8 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     form->addRow(i18n("Simultaneous downloads:"), m_concurrentDownloadsSpin);
     form->addRow(i18n("Simultaneous uploads:"), m_concurrentUploadsSpin);
     form->addRow(i18n("Simultaneous large transfers:"), m_concurrentLargeTransfersSpin);
+    form->addRow(i18n("Purge after unused days:"), m_cacheEvictionDaysSpin);
+    form->addRow(i18n("Global minimum free cache space:"), m_globalCacheFreeSpin);
     auto *folderBox = new QVBoxLayout;
     folderBox->addWidget(new QLabel(i18n("Select first-level remote folders to synchronize or exclude:"), this));
     folderBox->addWidget(m_folderTree);
@@ -261,6 +271,9 @@ void ProfileDialog::loadProfile(const QString &name)
     m_concurrentDownloadsSpin->setValue(profile.concurrentDownloads);
     m_concurrentUploadsSpin->setValue(profile.concurrentUploads);
     m_concurrentLargeTransfersSpin->setValue(profile.concurrentLargeTransfers);
+    m_cacheEvictionDaysSpin->setValue(profile.cacheEvictionDays);
+    m_globalCacheFreeSpin->setValue(static_cast<int>(m_store->cacheMinimumFreeBytes()
+                                                      / (1024 * 1024)));
     m_clientIdEdit->setText(profile.graphClientId);
     m_driveIdEdit->setText(profile.remoteDriveId);
     updateGraphStatus();
@@ -277,6 +290,9 @@ void ProfileDialog::createProfile()
     m_concurrentDownloadsSpin->setValue(2);
     m_concurrentUploadsSpin->setValue(2);
     m_concurrentLargeTransfersSpin->setValue(1);
+    m_cacheEvictionDaysSpin->setValue(0);
+    m_globalCacheFreeSpin->setValue(static_cast<int>(m_store->cacheMinimumFreeBytes()
+                                                      / (1024 * 1024)));
     m_folderTree->clear();
     m_clientIdEdit->clear();
     m_driveIdEdit->clear();
@@ -310,6 +326,7 @@ void ProfileDialog::saveProfile()
     profile.concurrentDownloads = m_concurrentDownloadsSpin->value();
     profile.concurrentUploads = m_concurrentUploadsSpin->value();
     profile.concurrentLargeTransfers = m_concurrentLargeTransfersSpin->value();
+    profile.cacheEvictionDays = m_cacheEvictionDaysSpin->value();
     // Rebuild folder policy from the tree instead of appending to the values
     // loaded above; repeated saves must remain idempotent.
     profile.includedFolders.clear();
@@ -336,6 +353,8 @@ void ProfileDialog::saveProfile()
     // this list here keeps a save of unrelated settings non-destructive.
     m_store->save(profile);
     m_store->setGlobalSyncEnabled(m_globalSyncEnabledCheck->isChecked());
+    m_store->setCacheMinimumFreeBytes(static_cast<qint64>(m_globalCacheFreeSpin->value())
+                                      * 1024 * 1024);
     Q_EMIT profileSaved(name);
     refreshProfileList(name);
 }

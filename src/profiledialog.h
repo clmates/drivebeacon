@@ -77,6 +77,8 @@ private:
     QSpinBox *m_concurrentDownloadsSpin;
     QSpinBox *m_concurrentUploadsSpin;
     QSpinBox *m_concurrentLargeTransfersSpin;
+    QSpinBox *m_cacheEvictionDaysSpin;
+    QSpinBox *m_globalCacheFreeSpin;
     QLineEdit *m_clientIdEdit;
     QPushButton *m_clientIdHelpButton;
     QLineEdit *m_driveIdEdit;

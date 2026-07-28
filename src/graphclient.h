@@ -112,6 +112,8 @@ public:
     void stopMonitoring();
     /** Applies per-profile transfer limits before synchronization starts. */
     void configureTransferConcurrency(int downloads, int uploads, int largeTransfers);
+    /** Configures automatic OnDemand cache eviction for this profile. */
+    void configureCacheEviction(int unusedDays, qint64 minimumFreeBytes);
     /** Applies persisted path overrides; descendants inherit the nearest rule. */
     void setPathPolicies(const QStringList &policies);
     /** Returns path policies in the persisted path<TAB>availability format. */
@@ -204,6 +206,8 @@ private:
                                 const std::shared_ptr<DownloadTransfer> &transfer);
     /** Compares the filesystem with the persisted hash baseline. */
     void scanLocalChanges();
+    /** Purges eligible cached OnDemand files without touching Graph content. */
+    void purgeOnDemandCache();
     /** Queues one file hash without blocking Graph's event loop. */
     void queueLocalHash(const QString &relativePath,
                         const QString &localPath,
@@ -307,6 +311,8 @@ private:
     /** Local polling and remote delta polling timers. */
     QTimer m_uploadTimer;
     QTimer m_remoteTimer;
+    /** Periodic cache maintenance independent from remote delta polling. */
+    QTimer m_cacheTimer;
     /** Bounds disk-heavy hashing so it cannot consume all service workers. */
     QThreadPool m_hashPool;
     /** False while a profile is paused; persisted state remains untouched. */
@@ -355,4 +361,6 @@ private:
     int m_maxConcurrentDownloads = 2;
     int m_maxConcurrentUploads = 2;
     int m_maxConcurrentLargeTransfers = 1;
+    int m_cacheEvictionDays = 0;
+    qint64 m_cacheMinimumFreeBytes = 0;
 };

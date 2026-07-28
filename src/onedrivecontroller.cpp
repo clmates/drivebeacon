@@ -50,6 +50,7 @@ OneDriveController::OneDriveController(const QString &profileName,
     // started; RemoteOnly must never enqueue local content transfers.
     m_graphClient.setPathPolicies(m_profile.graphPathPolicies);
     m_graphClient.setPlaceholderPaths(m_profile.graphPlaceholderPaths);
+    configureGraphRuntimeSettings();
     m_globalGraphSyncEnabled = m_profileStore.globalSyncEnabled();
     m_graphSyncEnabled = m_autoStartGraphSync && m_profile.syncEnabled
         && m_globalGraphSyncEnabled;
@@ -500,6 +501,15 @@ void OneDriveController::setGraphPathPolicies(const QStringList &policies)
     m_profileStore.save(m_profile);
 }
 
+void OneDriveController::configureGraphRuntimeSettings()
+{
+    m_graphClient.configureTransferConcurrency(
+        m_profile.concurrentDownloads, m_profile.concurrentUploads,
+        m_profile.concurrentLargeTransfers);
+    m_graphClient.configureCacheEviction(
+        m_profile.cacheEvictionDays, m_profileStore.cacheMinimumFreeBytes());
+}
+
 void OneDriveController::reloadProfileSettings(const SyncProfile &profile)
 {
     const bool foldersChanged = m_profile.includedFolders != profile.includedFolders
@@ -509,7 +519,8 @@ void OneDriveController::reloadProfileSettings(const SyncProfile &profile)
             != profile.remoteCheckIntervalSeconds
         || m_profile.concurrentDownloads != profile.concurrentDownloads
         || m_profile.concurrentUploads != profile.concurrentUploads
-        || m_profile.concurrentLargeTransfers != profile.concurrentLargeTransfers;
+        || m_profile.concurrentLargeTransfers != profile.concurrentLargeTransfers
+        || m_profile.cacheEvictionDays != profile.cacheEvictionDays;
     const bool syncStateChanged = m_profile.syncEnabled != profile.syncEnabled;
     const bool driveChanged = m_profile.remoteDriveId != profile.remoteDriveId;
 
@@ -527,6 +538,8 @@ void OneDriveController::reloadProfileSettings(const SyncProfile &profile)
     m_profile.concurrentUploads = profile.concurrentUploads;
     m_profile.concurrentLargeTransfers = profile.concurrentLargeTransfers;
     m_profile.syncEnabled = profile.syncEnabled;
+    m_profile.cacheEvictionDays = profile.cacheEvictionDays;
+    configureGraphRuntimeSettings();
 
     if (policiesChanged) {
         m_graphClient.setPathPolicies(m_profile.graphPathPolicies);

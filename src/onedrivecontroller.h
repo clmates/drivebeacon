@@ -194,6 +194,8 @@ private:
     void scheduleGraphRetry(int retryAfterSeconds);
     /** Re-enters the remote comparison after the throttling delay expires. */
     void retryGraphSynchronization();
+    /** Applies transfer and cache policies to the active Graph client. */
+    void configureGraphRuntimeSettings();
 
     ActivityModel m_activities;
     ProfileStore m_profileStore;

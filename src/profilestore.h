@@ -27,8 +27,12 @@ public:
     void save(const SyncProfile &profile);
     /** Returns whether synchronization is globally enabled for all profiles. */
     [[nodiscard]] bool globalSyncEnabled() const;
+    /** Returns the global minimum free cache space in bytes; zero disables it. */
+    [[nodiscard]] qint64 cacheMinimumFreeBytes() const;
     /** Persists the global pause state without changing individual profiles. */
     void setGlobalSyncEnabled(bool enabled);
+    /** Persists the global minimum free cache space in bytes. */
+    void setCacheMinimumFreeBytes(qint64 bytes);
     /** Marks a profile as the default when no command-line override is supplied. */
     void setActiveProfileName(const QString &name);
 

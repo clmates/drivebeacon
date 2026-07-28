@@ -19,6 +19,7 @@
 #include <QUrl>
 #include <QUrlQuery>
 #include <QSet>
+#include <QStorageInfo>
 #include <QThreadPool>
 #include <QRunnable>
 #include <QThread>
@@ -194,13 +195,16 @@ GraphClient::GraphClient(QObject *parent)
     , m_network(this)
     , m_uploadTimer(this)
     , m_remoteTimer(this)
+    , m_cacheTimer(this)
 {
     m_uploadTimer.setInterval(10000);
+    m_cacheTimer.setInterval(5 * 60 * 1000);
     // Hashing is independent from network concurrency. A small dedicated pool
     // keeps large local scans responsive without saturating the disk or CPU.
     m_hashPool.setMaxThreadCount(std::max(1, std::min(2, QThread::idealThreadCount() / 2)));
     m_hashPool.setThreadPriority(QThread::LowestPriority);
     connect(&m_uploadTimer, &QTimer::timeout, this, &GraphClient::scanLocalChanges);
+    connect(&m_cacheTimer, &QTimer::timeout, this, &GraphClient::purgeOnDemandCache);
     connect(&m_remoteTimer, &QTimer::timeout, this, [this] {
         // Do not advance the cursor while a transfer is still being applied.
         // Otherwise a restart could resume after an unfinished large download.
@@ -618,6 +622,7 @@ void GraphClient::startRemoteMonitoring(const QString &driveId, const QString &a
     m_remoteTimer.setInterval(qBound(10, intervalSeconds, 3600) * 1000);
     m_remoteTimer.start();
     m_uploadTimer.start();
+    m_cacheTimer.start();
     // A pause can occur while a page still has queued work. Re-enable the
     // schedulers so that resuming continues that page before polling again.
     startPendingDownloads();
@@ -631,6 +636,7 @@ void GraphClient::stopMonitoring()
     m_monitoringEnabled = false;
     m_uploadTimer.stop();
     m_remoteTimer.stop();
+    m_cacheTimer.stop();
 }
 
 void GraphClient::configureTransferConcurrency(int downloads, int uploads, int largeTransfers)
@@ -644,6 +650,88 @@ void GraphClient::configureTransferConcurrency(int downloads, int uploads, int l
                     .arg(m_maxConcurrentDownloads)
                     .arg(m_maxConcurrentUploads)
                     .arg(m_maxConcurrentLargeTransfers));
+}
+
+void GraphClient::configureCacheEviction(int unusedDays, qint64 minimumFreeBytes)
+{
+    m_cacheEvictionDays = qBound(0, unusedDays, 3650);
+    m_cacheMinimumFreeBytes = qMax<qint64>(0, minimumFreeBytes);
+    if (m_monitoringEnabled) {
+        purgeOnDemandCache();
+    }
+}
+
+void GraphClient::purgeOnDemandCache()
+{
+    if (m_syncDirectory.isEmpty()
+        || (m_cacheEvictionDays <= 0 && m_cacheMinimumFreeBytes <= 0)) {
+        return;
+    }
+    const QStorageInfo storage(m_syncDirectory);
+    if (!storage.isValid()) {
+        return;
+    }
+    qint64 available = storage.bytesAvailable();
+    const QDateTime cutoff = QDateTime::currentDateTime()
+        .addDays(-m_cacheEvictionDays);
+    struct Candidate {
+        QString path;
+        QDateTime lastUsed;
+        qint64 size = 0;
+    };
+    QList<Candidate> candidates;
+    QDirIterator iterator(m_syncDirectory, QDir::Files, QDirIterator::Subdirectories);
+    while (iterator.hasNext()) {
+        const QString localPath = iterator.next();
+        const QString relativePath = QDir(m_syncDirectory).relativeFilePath(localPath);
+        if (isTransientLocalName(relativePath)
+            || !m_localSignatures.contains(relativePath)
+            || availabilityForPath(relativePath) != LocalAvailability::OnDemand
+            || m_placeholderPaths.contains(relativePath)
+            || m_pendingUploadPaths.contains(relativePath)
+            || m_activeUploads.contains(relativePath)
+            || m_activeDownloads.contains(relativePath)) {
+            continue;
+        }
+        const QFileInfo info(localPath);
+        const QDateTime lastUsed = info.lastRead().isValid()
+            ? info.lastRead() : info.lastModified();
+        const bool expired = m_cacheEvictionDays > 0 && lastUsed < cutoff;
+        const bool spacePressure = m_cacheMinimumFreeBytes > 0
+            && available < m_cacheMinimumFreeBytes;
+        if (expired || spacePressure) {
+            candidates.append({relativePath, lastUsed, info.size()});
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate &left,
+                                                       const Candidate &right) {
+        return left.lastUsed < right.lastUsed;
+    });
+    bool changed = false;
+    for (const Candidate &candidate : std::as_const(candidates)) {
+        if (m_cacheMinimumFreeBytes > 0 && available >= m_cacheMinimumFreeBytes
+            && m_cacheEvictionDays <= 0) {
+            break;
+        }
+        if (!QFile::remove(safeLocalPath(candidate.path))) {
+            continue;
+        }
+        // Keep the path visible through FUSE and stop the local scanner from
+        // interpreting cache eviction as a user deletion. The remote item ID,
+        // eTag and hash baseline are replaced by an explicit placeholder
+        // state, exactly as with manual Release Local cache.
+        createPlaceholder(candidate.path);
+        available += candidate.size;
+        m_localSignatures.remove(candidate.path);
+        m_localMetadata.remove(candidate.path);
+        changed = true;
+        log(QStringLiteral("Graph sync: automatic cache eviction %1 (%2 MiB)")
+                .arg(candidate.path).arg(candidate.size / (1024 * 1024)));
+    }
+    if (changed) {
+        Q_EMIT placeholderStateChanged(placeholderPaths());
+        Q_EMIT localStateChanged(localSignatures(), remotePaths());
+    }
 }
 
 void GraphClient::setPathPolicies(const QStringList &policies)

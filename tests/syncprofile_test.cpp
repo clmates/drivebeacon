@@ -96,6 +96,7 @@ void SyncProfileTest::storesProfilesIndependently()
     graph.concurrentDownloads = 4;
     graph.concurrentUploads = 3;
     graph.concurrentLargeTransfers = 2;
+    graph.cacheEvictionDays = 14;
     graph.graphDeltaLink = QStringLiteral("https://graph.example/delta");
     graph.graphLocalSignatures = {QStringLiteral("a\tsha")};
     graph.graphRemotePaths = {QStringLiteral("id\tDocumentos/a.txt\te")};
@@ -117,6 +118,7 @@ void SyncProfileTest::storesProfilesIndependently()
     QCOMPARE(store.load().concurrentDownloads, 4);
     QCOMPARE(store.load().concurrentUploads, 3);
     QCOMPARE(store.load().concurrentLargeTransfers, 2);
+    QCOMPARE(store.load().cacheEvictionDays, 14);
     QCOMPARE(store.load().graphDeltaLink, QStringLiteral("https://graph.example/delta"));
     QCOMPARE(store.load().graphLocalSignatures, QStringList({QStringLiteral("a\tsha")}));
     QCOMPARE(store.load().graphRemotePaths,
@@ -144,8 +146,11 @@ void SyncProfileTest::storesIndividualAndGlobalSyncState()
 
     QCOMPARE(store.load(profile.name).syncEnabled, false);
     QCOMPARE(store.globalSyncEnabled(), true);
+    QCOMPARE(store.cacheMinimumFreeBytes(), qint64(0));
     store.setGlobalSyncEnabled(false);
+    store.setCacheMinimumFreeBytes(512 * 1024 * 1024);
     QCOMPARE(store.globalSyncEnabled(), false);
+    QCOMPARE(store.cacheMinimumFreeBytes(), qint64(512 * 1024 * 1024));
 
     // Global pause is independent from the per-profile switch and must not
     // rewrite the profile's own state or its persisted synchronization data.
