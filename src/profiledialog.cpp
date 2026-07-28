@@ -28,6 +28,14 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+namespace {
+
+// This public desktop client registration is the packaged default. It contains
+// no user credential; each account still authorizes independently in Graph.
+constexpr auto kPackagedGraphClientId = "bf5e2104-7841-4c6a-aad4-a90fbe4dd3a7";
+
+} // namespace
+
 ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller, QWidget *parent)
     : QDialog(parent)
     , m_store(store)
@@ -102,10 +110,12 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     auto *loadButton = new QPushButton(i18n("Load profile"), this);
     auto *saveButton = new QPushButton(i18n("Save"), this);
     auto *useButton = new QPushButton(i18n("Use profile"), this);
+    auto *deleteButton = new QPushButton(i18n("Delete profile"), this);
     profileButtons->addWidget(newButton);
     profileButtons->addWidget(loadButton);
     profileButtons->addWidget(saveButton);
     profileButtons->addWidget(useButton);
+    profileButtons->addWidget(deleteButton);
 
     auto *profileColumn = new QVBoxLayout;
     profileColumn->addWidget(new QLabel(i18n("Profiles"), this));
@@ -162,6 +172,7 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     connect(loadButton, &QPushButton::clicked, this, &ProfileDialog::loadSelectedProfile);
     connect(saveButton, &QPushButton::clicked, this, &ProfileDialog::saveProfile);
     connect(useButton, &QPushButton::clicked, this, &ProfileDialog::useProfile);
+    connect(deleteButton, &QPushButton::clicked, this, &ProfileDialog::deleteProfile);
     connect(browseButton, &QPushButton::clicked, this, [this] {
     const QString directory = QFileDialog::getExistingDirectory(
         this, i18n("Select FUSE mount directory"), m_directoryEdit->text());
@@ -274,7 +285,9 @@ void ProfileDialog::loadProfile(const QString &name)
     m_cacheEvictionDaysSpin->setValue(profile.cacheEvictionDays);
     m_globalCacheFreeSpin->setValue(static_cast<int>(m_store->cacheMinimumFreeBytes()
                                                       / (1024 * 1024)));
-    m_clientIdEdit->setText(profile.graphClientId);
+    m_clientIdEdit->setText(profile.graphClientId.isEmpty()
+                                ? QString::fromLatin1(kPackagedGraphClientId)
+                                : profile.graphClientId);
     m_driveIdEdit->setText(profile.remoteDriveId);
     updateGraphStatus();
     populateRemoteFolders();
@@ -282,9 +295,9 @@ void ProfileDialog::loadProfile(const QString &name)
 
 void ProfileDialog::createProfile()
 {
-    m_nameEdit->setText(QStringLiteral("graph-test"));
+    m_nameEdit->setText(QStringLiteral("graph"));
     m_backendCombo->setCurrentIndex(m_backendCombo->findData(QStringLiteral("graph")));
-    m_directoryEdit->setText(QDir::home().filePath(QStringLiteral("Onedrive-Graph-Test")));
+    m_directoryEdit->setText(QDir::home().filePath(QStringLiteral("Onedrive-Graph")));
     m_syncEnabledCheck->setChecked(true);
     m_globalSyncEnabledCheck->setChecked(m_store->globalSyncEnabled());
     m_concurrentDownloadsSpin->setValue(2);
@@ -294,7 +307,7 @@ void ProfileDialog::createProfile()
     m_globalCacheFreeSpin->setValue(static_cast<int>(m_store->cacheMinimumFreeBytes()
                                                       / (1024 * 1024)));
     m_folderTree->clear();
-    m_clientIdEdit->clear();
+    m_clientIdEdit->setText(QString::fromLatin1(kPackagedGraphClientId));
     m_driveIdEdit->clear();
     m_profileList->clearSelection();
     updateGraphStatus();
@@ -307,6 +320,29 @@ void ProfileDialog::saveProfile()
         QMessageBox::warning(this, i18n("Invalid profile"),
                              i18n("A profile name and FUSE mount directory are required."));
         return;
+    }
+
+    // A deleted profile may have left its private cache intentionally. Never
+    // reuse that state silently for a newly created profile with the same key.
+    if (!m_store->profileNames().contains(name)
+        && QDir(ProfileStore::cacheDirectory(name)).exists()) {
+        QMessageBox cacheWarning(this);
+        cacheWarning.setWindowTitle(i18n("Existing local cache"));
+        cacheWarning.setText(i18n("A local cache already exists for '%1'.", name));
+        cacheWarning.setInformativeText(i18n(
+            "You can reuse it, or delete it before creating the profile. Remote files "
+            "will not be changed by either choice."));
+        auto *useCache = cacheWarning.addButton(i18n("Use existing cache"),
+                                                QMessageBox::AcceptRole);
+        auto *deleteCache = cacheWarning.addButton(i18n("Delete cache"),
+                                                   QMessageBox::DestructiveRole);
+        cacheWarning.addButton(QMessageBox::Cancel);
+        cacheWarning.exec();
+        if (cacheWarning.clickedButton() == deleteCache) {
+            QDir(ProfileStore::cacheDirectory(name)).removeRecursively();
+        } else if (cacheWarning.clickedButton() != useCache) {
+            return;
+        }
     }
 
     // Update the existing profile instead of rebuilding it. In particular,
@@ -367,6 +403,32 @@ void ProfileDialog::useProfile()
         m_store->setActiveProfileName(name);
         Q_EMIT useProfileRequested(name);
     }
+}
+
+void ProfileDialog::deleteProfile()
+{
+    const QListWidgetItem *item = m_profileList->currentItem();
+    if (!item) {
+        return;
+    }
+    const QString name = item->text();
+    QMessageBox confirm(this);
+    confirm.setWindowTitle(i18n("Delete profile"));
+    confirm.setText(i18n("Delete the local profile '%1'?", name));
+    confirm.setInformativeText(i18n(
+        "The FUSE view will be unmounted. Microsoft Graph files will not be changed. "
+        "Choose whether to remove the private local cache too."));
+    auto *deleteCache = confirm.addButton(i18n("Delete profile and cache"),
+                                          QMessageBox::DestructiveRole);
+    auto *keepCache = confirm.addButton(i18n("Delete profile, keep cache"),
+                                        QMessageBox::AcceptRole);
+    confirm.addButton(QMessageBox::Cancel);
+    confirm.exec();
+    if (confirm.clickedButton() != deleteCache && confirm.clickedButton() != keepCache) {
+        return;
+    }
+    Q_EMIT profileDeleteRequested(name, confirm.clickedButton() == deleteCache);
+    close();
 }
 
 void ProfileDialog::connectGraph()

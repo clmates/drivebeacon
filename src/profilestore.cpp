@@ -19,6 +19,14 @@ ProfileStore::ProfileStore(QObject *parent)
 {
 }
 
+QString ProfileStore::cacheDirectory(const QString &name)
+{
+    const QString dataRoot = QDir(
+        QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))
+        .filePath(QStringLiteral("drivebeacon/cache"));
+    return QDir(dataRoot).filePath(normalizedName(name));
+}
+
 QString ProfileStore::normalizedName(const QString &name)
 {
     QString normalized = name.trimmed();
@@ -144,6 +152,34 @@ void ProfileStore::save(const SyncProfile &profile)
                       profile.graphSyncedExcludedFolders);
     settings.endGroup();
     settings.sync();
+}
+
+bool ProfileStore::removeProfile(const QString &name)
+{
+    const QString normalized = normalizedName(name);
+    QSettings settings = ProfileStore::settings();
+    const QStringList names = profileNames();
+    if (!names.contains(normalized)) {
+        return false;
+    }
+
+    settings.remove(QStringLiteral("profiles/%1").arg(normalized));
+    if (settings.value(QStringLiteral("profiles/active")).toString() == normalized) {
+        QString replacement;
+        for (const QString &candidate : names) {
+            if (candidate != normalized) {
+                replacement = candidate;
+                break;
+            }
+        }
+        if (replacement.isEmpty()) {
+            settings.remove(QStringLiteral("profiles/active"));
+        } else {
+            settings.setValue(QStringLiteral("profiles/active"), replacement);
+        }
+    }
+    settings.sync();
+    return settings.status() == QSettings::NoError;
 }
 
 bool ProfileStore::globalSyncEnabled() const

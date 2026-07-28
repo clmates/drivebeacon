@@ -31,6 +31,8 @@ Q_SIGNALS:
     void profileSaved(const QString &profileName);
     /** Requests relaunching DriveBeacon with the selected profile. */
     void useProfileRequested(const QString &profileName);
+    /** Requests service-owned removal of local profile state. */
+    void profileDeleteRequested(const QString &profileName, bool deleteCache);
 
 private Q_SLOTS:
     /** Loads the profile represented by the selected list row. */
@@ -43,6 +45,8 @@ private Q_SLOTS:
     void saveProfile();
     /** Saves the profile and requests a relaunch using its isolated state. */
     void useProfile();
+    /** Confirms and requests deletion of the selected local profile. */
+    void deleteProfile();
     /** Starts authentication for the active Graph profile. */
     void connectGraph();
     /** Opens the browser URL emitted by the OAuth helper. */

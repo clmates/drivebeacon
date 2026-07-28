@@ -100,3 +100,23 @@ bool TokenStore::save(const QString &profileName, const OAuthTokens &tokens, QSt
     }
     return saved;
 }
+
+bool TokenStore::remove(const QString &profileName, QString *error)
+{
+    if (profileName.trimmed().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("A profile name is required to remove credentials.");
+        }
+        return false;
+    }
+    auto *wallet = openWallet(error);
+    if (!wallet) {
+        return false;
+    }
+    const int result = wallet->removeEntry(entryName(profileName));
+    delete wallet;
+    if (result != 0 && error) {
+        *error = QStringLiteral("The KDE Wallet rejected the profile credentials removal.");
+    }
+    return result == 0;
+}

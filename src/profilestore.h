@@ -25,6 +25,10 @@ public:
     [[nodiscard]] SyncProfile load(const QString &name = {}) const;
     /** Persists the active profile for the next application start. */
     void save(const SyncProfile &profile);
+    /** Removes only the local settings group; remote Graph data is untouched. */
+    bool removeProfile(const QString &name);
+    /** Returns the private cache path associated with a profile key. */
+    [[nodiscard]] static QString cacheDirectory(const QString &name);
     /** Returns whether synchronization is globally enabled for all profiles. */
     [[nodiscard]] bool globalSyncEnabled() const;
     /** Returns the global minimum free cache space in bytes; zero disables it. */

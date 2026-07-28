@@ -2,6 +2,8 @@
 
 #include "drivebeaconservice.h"
 
+#include "tokenstore.h"
+
 #include <algorithm>
 #include <QCoreApplication>
 #include <QDir>
@@ -242,6 +244,54 @@ QVariantMap DriveBeaconService::evictPath(const QString &profileName,
     }
     controller->evictGraphPath(relativePath);
     return operationResult(true, QStringLiteral("Local cache release queued."));
+}
+
+QVariantMap DriveBeaconService::deleteProfile(const QString &profileName, bool deleteCache)
+{
+    const QString name = profileName.trimmed();
+    if (name.isEmpty() || !m_profileStore.profileNames().contains(name)) {
+        return operationResult(false, QStringLiteral("Profile does not exist."));
+    }
+
+    const SyncProfile profile = m_profileStore.load(name);
+    // Unmount before touching the cache so no FUSE helper retains an endpoint
+    // while the user deletes local profile state.
+    if (m_fuseProcesses.contains(name)) {
+        unmountProfile(name);
+    } else {
+        // A crashed or externally terminated helper may no longer be tracked
+        // by this service even though its configured mount point remains busy.
+        const QString fusermount = QStandardPaths::findExecutable(
+            QStringLiteral("fusermount3"));
+        if (!fusermount.isEmpty() && !profile.mountDirectory.isEmpty()) {
+            QProcess::execute(fusermount, {QStringLiteral("-u"), profile.mountDirectory});
+        }
+    }
+    if (auto *controller = m_controllers.take(name)) {
+        controller->setGraphSyncEnabled(false);
+        controller->deleteLater();
+    }
+
+    QString walletError;
+    const bool credentialsRemoved = TokenStore::remove(name, &walletError);
+    const bool settingsRemoved = m_profileStore.removeProfile(name);
+    if (deleteCache) {
+        QDir(ProfileStore::cacheDirectory(name)).removeRecursively();
+    }
+    if (m_activeProfileName == name) {
+        m_activeProfileName = m_profileStore.activeProfileName();
+    }
+    if (!credentialsRemoved && !walletError.isEmpty()) {
+        qWarning().noquote() << "DriveBeacon: profile credentials were not removed:"
+                             << walletError;
+    }
+    Q_EMIT statusChanged();
+    if (!settingsRemoved) {
+        return operationResult(false, QStringLiteral("Could not remove local profile settings."));
+    }
+    return operationResult(true, deleteCache
+                                      ? QStringLiteral("Profile and local cache removed.")
+                                      : QStringLiteral("Profile removed; local cache preserved."));
 }
 
 QVariantMap DriveBeaconService::notifyLocalChange(const QString &profileName)

@@ -153,6 +153,11 @@ void DriveBeaconServiceClient::evictPath(const QString &profileName,
     call(QStringLiteral("evictPath"), {profileName, relativePath});
 }
 
+void DriveBeaconServiceClient::deleteProfile(const QString &profileName, bool deleteCache)
+{
+    call(QStringLiteral("deleteProfile"), {profileName, deleteCache});
+}
+
 void DriveBeaconServiceClient::materializeFile(const QString &profileName,
                                                const QString &relativePath)
 {

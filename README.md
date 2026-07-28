@@ -24,13 +24,13 @@ abraunegg profile:
 
 ```bash
 build/bin/DriveBeacon \
-  --profile graph-test \
+  --profile graph \
   --backend graph \
-  --local-directory "$HOME/OneDrive-Graph-Test"
+  --local-directory "$HOME/Onedrive-Graph"
 ```
 
-The profile name is also included in the tray identifier, so a Graph test
-instance and the normal abraunegg instance can run at the same time. A Graph
+The profile name is also included in the tray identifier, so a Graph instance
+and the normal abraunegg instance can run at the same time. A Graph
 profile never starts, stops, restarts, or follows `onedrive.service`.
 
 On the first run after upgrading from the 0.1.x layout, DriveBeacon reads the
@@ -40,8 +40,9 @@ profile with the detected directory. Cancelling continues without conversion
 and allows the dialog to be shown again on a later run.
 
 Use **Configure profiles…** from the tray menu to create or edit profiles. For
-a Graph profile, enter the public application client ID, save it, select **Use
-profile**, and reopen the configuration dialog after the restart. The
+a Graph profile, the packaged default public application client ID is
+`bf5e2104-7841-4c6a-aad4-a90fbe4dd3a7`. Save the profile, select **Use profile**,
+and reopen the configuration dialog after the restart. The
 dialog includes a tooltip and a help button explaining that this ID is public,
 how it differs from account credentials, and when a user may provide their own
 Microsoft Entra app registration. The release build will provide a default
@@ -103,7 +104,7 @@ if browsing should remain metadata-only. Baloo file indexing should also
 exclude the mount:
 
 ```bash
-balooctl6 config add excludeFolders "$HOME/Onedrive-Graph-Test"
+balooctl6 config add excludeFolders "$HOME/Onedrive-Graph"
 balooctl6 config show excludeFolders
 ```
 

@@ -192,6 +192,12 @@ int main(int argc, char *argv[])
                                  serviceClient.reloadProfiles();
                              }
                          });
+        QObject::connect(dialog, &ProfileDialog::profileDeleteRequested, &application,
+                         [&serviceClient](const QString &profileName, bool deleteCache) {
+                             if (serviceClient.available()) {
+                                 serviceClient.deleteProfile(profileName, deleteCache);
+                             }
+                         });
         QObject::connect(dialog, &ProfileDialog::useProfileRequested,
                          &application, [dialog, &application](const QString &profileName) {
                              const QString executable = QCoreApplication::applicationFilePath();
