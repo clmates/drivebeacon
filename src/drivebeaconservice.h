@@ -53,6 +53,10 @@ public:
 public Q_SLOTS:
     /** Requests an immediate Graph pass and returns its acceptance result. */
     QVariantMap synchronizeGraph();
+    /** Starts OAuth for a named Graph profile without changing the active profile. */
+    QVariantMap beginGraphLogin(const QString &profileName, const QString &clientId);
+    /** Completes OAuth for a named Graph profile without restarting the tray. */
+    QVariantMap completeGraphLogin(const QString &profileName, const QString &responseUrl);
     /** Rebuilds one profile's selected local tree from the remote drive. */
     QVariantMap forceRemoteResync(const QString &profileName);
     /** Requests a fresh first-level folder listing. */
@@ -91,6 +95,10 @@ Q_SIGNALS:
     void statusChanged();
     /** Emitted for activity messages consumed by future tray clients. */
     void activityMessage(const QString &message);
+    /** Publishes OAuth URL and result changes for an individual profile. */
+    void graphAuthStateChanged(const QString &profileName, bool authenticated,
+                               const QString &errorMessage,
+                               const QString &authorizationUrl);
 
 private:
     /** Forwards controller state changes without exposing Qt UI objects. */

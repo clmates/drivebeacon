@@ -4,7 +4,7 @@
         "Icon": "folder-cloud",
         "License": "GPL-3.0-only",
         "Name": "DriveBeacon file actions",
-        "Version": "1.0.0",
+        "Version": "1.0.1",
         "MimeTypes": [
             "inode/directory",
             "text/plain",

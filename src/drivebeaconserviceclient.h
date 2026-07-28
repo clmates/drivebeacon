@@ -52,6 +52,10 @@ public Q_SLOTS:
     void refresh();
     /** Requests a synchronization pass from the service. */
     void synchronizeGraph();
+    /** Starts OAuth for a profile selected in the configuration dialog. */
+    void beginGraphLogin(const QString &profileName, const QString &clientId);
+    /** Completes OAuth for a profile selected in the configuration dialog. */
+    void completeGraphLogin(const QString &profileName, const QString &responseUrl);
     /** Rebuilds one named profile locally from its selected remote tree. */
     void forceRemoteResync(const QString &profileName);
     /** Requests a non-destructive remote folder refresh. */
@@ -88,12 +92,23 @@ Q_SIGNALS:
     void errorOccurred(const QString &message);
     /** Emitted for synchronization log messages forwarded by the service. */
     void activityMessage(const QString &message);
+    /** Emitted when the service returns the authorization URL for one profile. */
+    void graphLoginStarted(const QString &profileName, const QString &authorizationUrl,
+                           const QString &errorMessage);
+    /** Emitted whenever one profile's OAuth URL or authentication state changes. */
+    void graphAuthStateChanged(const QString &profileName, bool authenticated,
+                               const QString &errorMessage,
+                               const QString &authorizationUrl);
 
 private Q_SLOTS:
     /** Re-reads properties after the service emits its status signal. */
     void onRemoteStatusChanged();
     /** Receives one activity signal from the service's D-Bus interface. */
     void onRemoteActivityMessage(const QString &message);
+    /** Receives profile-specific OAuth state from the service. */
+    void onRemoteGraphAuthStateChanged(const QString &profileName, bool authenticated,
+                                       const QString &errorMessage,
+                                       const QString &authorizationUrl);
 
 private:
     /** Calls a service method and reports D-Bus errors to the tray. */

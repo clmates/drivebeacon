@@ -4,6 +4,7 @@
 
 #include "onedrivecontroller.h"
 #include "profilestore.h"
+#include "drivebeaconserviceclient.h"
 
 #include <KLocalizedString>
 
@@ -36,10 +37,12 @@ constexpr auto kPackagedGraphClientId = "bf5e2104-7841-4c6a-aad4-a90fbe4dd3a7";
 
 } // namespace
 
-ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller, QWidget *parent)
+ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller,
+                             DriveBeaconServiceClient *serviceClient, QWidget *parent)
     : QDialog(parent)
     , m_store(store)
     , m_controller(controller)
+    , m_serviceClient(serviceClient)
     , m_profileList(new QListWidget(this))
     , m_nameEdit(new QLineEdit(this))
     , m_backendCombo(new QComboBox(this))
@@ -213,12 +216,52 @@ ProfileDialog::ProfileDialog(ProfileStore *store, OneDriveController *controller
     connect(m_completeButton, &QPushButton::clicked, this, [this] {
         m_graphConnectionPending = true;
         m_graphStatusLabel->setText(i18n("Completing sign-in…"));
-        m_controller->completeGraphLogin(m_responseUrlEdit->text());
+        const QString profileName = m_nameEdit->text().trimmed();
+        if (profileName == m_controller->profileName()) {
+            m_controller->completeGraphLogin(m_responseUrlEdit->text());
+        } else {
+            m_serviceClient->completeGraphLogin(profileName, m_responseUrlEdit->text());
+        }
     });
     connect(m_controller, &OneDriveController::graphAuthChanged,
             this, &ProfileDialog::updateGraphStatus);
     connect(m_controller, &OneDriveController::graphRemoteFoldersChanged,
             this, &ProfileDialog::populateRemoteFolders);
+    connect(m_serviceClient, &DriveBeaconServiceClient::graphLoginStarted, this,
+            [this](const QString &profileName, const QString &authorizationUrl,
+                   const QString &errorMessage) {
+                if (profileName != m_nameEdit->text().trimmed()) {
+                    return;
+                }
+                m_remoteAuthorizationUrl = authorizationUrl;
+                m_remoteGraphError = errorMessage;
+                if (!errorMessage.isEmpty()) {
+                    m_graphConnectionPending = false;
+                }
+                updateGraphStatus();
+            });
+    connect(m_serviceClient, &DriveBeaconServiceClient::graphAuthStateChanged, this,
+            [this](const QString &profileName, bool authenticated,
+                   const QString &errorMessage, const QString &authorizationUrl) {
+                if (profileName != m_nameEdit->text().trimmed()) {
+                    return;
+                }
+                m_remoteAuthenticated = authenticated;
+                m_remoteGraphError = errorMessage;
+                m_remoteAuthorizationUrl = authorizationUrl;
+                if (authenticated || !errorMessage.isEmpty()) {
+                    m_graphConnectionPending = false;
+                }
+                updateGraphStatus();
+            });
+    connect(m_serviceClient, &DriveBeaconServiceClient::profilesChanged, this,
+            [this] {
+                // The service owns deletion and profile reloads. Refresh the
+                // editor list after it updates the shared settings file so a
+                // delete does not require closing and reopening the tray.
+                refreshProfileList(m_nameEdit->text().trimmed());
+                updateSelectedServiceProfileState();
+            });
     connect(m_folderTree, &QTreeWidget::itemChanged,
             this, &ProfileDialog::updateFolderSelection);
     connect(m_refreshFoldersButton, &QPushButton::clicked,
@@ -289,6 +332,7 @@ void ProfileDialog::loadProfile(const QString &name)
                                 ? QString::fromLatin1(kPackagedGraphClientId)
                                 : profile.graphClientId);
     m_driveIdEdit->setText(profile.remoteDriveId);
+    updateSelectedServiceProfileState();
     updateGraphStatus();
     populateRemoteFolders();
 }
@@ -428,7 +472,16 @@ void ProfileDialog::deleteProfile()
         return;
     }
     Q_EMIT profileDeleteRequested(name, confirm.clickedButton() == deleteCache);
-    close();
+    // Keep configuration open after deletion. Remove the row immediately for
+    // responsive feedback; the service's profile reload will reconcile the
+    // list with persistent settings and select the first remaining profile.
+    const int row = m_profileList->row(item);
+    delete m_profileList->takeItem(row);
+    if (m_profileList->count() > 0) {
+        m_profileList->setCurrentRow(0);
+    } else {
+        createProfile();
+    }
 }
 
 void ProfileDialog::connectGraph()
@@ -437,19 +490,24 @@ void ProfileDialog::connectGraph()
     if (syncBackendFromName(m_backendCombo->currentData().toString()) != SyncBackend::MicrosoftGraph) {
         return;
     }
-    if (m_controller->profileName() != m_nameEdit->text().trimmed()) {
-        QMessageBox::information(this, i18n("Profile not active"),
-                                 i18n("Use this profile first, then open configuration again to connect it."));
-        return;
-    }
     m_graphConnectionPending = true;
     m_graphStatusLabel->setText(i18n("Connecting…"));
-    m_controller->beginGraphLogin(m_clientIdEdit->text().trimmed());
+    const QString profileName = m_nameEdit->text().trimmed();
+    if (profileName == m_controller->profileName()) {
+        m_controller->beginGraphLogin(m_clientIdEdit->text().trimmed());
+    } else {
+        // Authentication belongs to the selected account, not to the tray's
+        // compatibility controller. The service keeps every profile's token
+        // store isolated while the tray remains responsive and open.
+        m_serviceClient->beginGraphLogin(profileName, m_clientIdEdit->text().trimmed());
+    }
 }
 
 void ProfileDialog::openVerificationPage()
 {
-    const QUrl url(m_controller->graphAuthorizationUrl());
+    const QString authorizationUrl = m_nameEdit->text().trimmed() == m_controller->profileName()
+        ? m_controller->graphAuthorizationUrl() : m_remoteAuthorizationUrl;
+    const QUrl url(authorizationUrl);
     if (url.isValid()) {
         QDesktopServices::openUrl(url);
     }
@@ -458,22 +516,43 @@ void ProfileDialog::openVerificationPage()
 void ProfileDialog::updateGraphStatus()
 {
     const bool graph = m_backendCombo->currentData().toString() == QLatin1String("graph");
+    const bool activeProfile = m_nameEdit->text().trimmed() == m_controller->profileName();
+    const bool authenticated = activeProfile ? m_controller->graphAuthenticated()
+                                             : m_remoteAuthenticated;
+    const QString error = activeProfile ? m_controller->graphErrorMessage()
+                                        : m_remoteGraphError;
+    const QString authorizationUrl = activeProfile ? m_controller->graphAuthorizationUrl()
+                                                   : m_remoteAuthorizationUrl;
     m_connectButton->setEnabled(graph);
-    m_openVerificationButton->setEnabled(graph && !m_controller->graphAuthorizationUrl().isEmpty());
-    m_completeButton->setEnabled(graph && !m_controller->graphAuthorizationUrl().isEmpty());
+    m_openVerificationButton->setEnabled(graph && !authorizationUrl.isEmpty());
+    m_completeButton->setEnabled(graph && !authorizationUrl.isEmpty());
     m_graphStatusLabel->setText(graph
-                                    ? m_controller->graphAuthenticated() ? i18n("Connected")
-                                        : !m_controller->graphErrorMessage().isEmpty()
-                                            ? m_controller->graphErrorMessage()
+                                    ? authenticated ? i18n("Connected")
+                                        : !error.isEmpty() ? error
                                             : m_graphConnectionPending ? i18n("Connecting…")
                                                                         : i18n("Not connected")
                                     : i18n("Not applicable"));
-    if (m_controller->graphAuthenticated() || !m_controller->graphErrorMessage().isEmpty()) {
+    if (authenticated || !error.isEmpty()) {
         m_graphConnectionPending = false;
     }
-    m_verificationLabel->setText(m_controller->graphAuthorizationUrl().isEmpty()
+    m_verificationLabel->setText(authorizationUrl.isEmpty()
                                      ? QString()
                                      : i18n("Open the sign-in page, authorize DriveBeacon, then paste the final redirect URL above."));
+}
+
+void ProfileDialog::updateSelectedServiceProfileState()
+{
+    if (!m_serviceClient) {
+        return;
+    }
+    const QString name = m_nameEdit->text().trimmed();
+    if (name.isEmpty() || name == m_controller->profileName()) {
+        return;
+    }
+    const QVariantMap status = m_serviceClient->profileStatus(name);
+    m_remoteAuthenticated = status.value(QStringLiteral("authenticated")).toBool();
+    m_remoteGraphError = status.value(QStringLiteral("error")).toString();
+    updateGraphStatus();
 }
 
 void ProfileDialog::refreshRemoteFolders()

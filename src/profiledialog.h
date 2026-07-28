@@ -15,6 +15,7 @@ class QTreeWidgetItem;
 class QSpinBox;
 class ProfileStore;
 class OneDriveController;
+class DriveBeaconServiceClient;
 
 /** Native editor for isolated DriveBeacon synchronization profiles. */
 class ProfileDialog final : public QDialog
@@ -24,6 +25,7 @@ class ProfileDialog final : public QDialog
 public:
     /** Creates an editor bound to the persistent profile store and active controller. */
     explicit ProfileDialog(ProfileStore *store, OneDriveController *controller,
+                           DriveBeaconServiceClient *serviceClient,
                            QWidget *parent = nullptr);
 
 Q_SIGNALS:
@@ -53,6 +55,8 @@ private Q_SLOTS:
     void openVerificationPage();
     /** Recomputes authentication controls from controller state. */
     void updateGraphStatus();
+    /** Applies authentication state reported for a non-active service profile. */
+    void updateSelectedServiceProfileState();
     /** Requests a fresh first-level folder listing from Graph. */
     void refreshRemoteFolders();
     /** Rebuilds the tree while preserving the profile's include/exclude policy. */
@@ -68,6 +72,7 @@ private:
 
     ProfileStore *m_store;
     OneDriveController *m_controller;
+    DriveBeaconServiceClient *m_serviceClient;
     QListWidget *m_profileList;
     QLineEdit *m_nameEdit;
     QComboBox *m_backendCombo;
@@ -93,5 +98,8 @@ private:
     QLineEdit *m_responseUrlEdit;
     QPushButton *m_completeButton;
     bool m_graphConnectionPending = false;
+    QString m_remoteAuthorizationUrl;
+    bool m_remoteAuthenticated = false;
+    QString m_remoteGraphError;
     bool m_loadingFolders = false;
 };

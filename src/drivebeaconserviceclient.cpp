@@ -27,6 +27,9 @@ DriveBeaconServiceClient::DriveBeaconServiceClient(QObject *parent)
     connection.connect(serviceName, objectPath, interfaceName,
                        QStringLiteral("activityMessage"),
                        this, SLOT(onRemoteActivityMessage(QString)));
+    connection.connect(serviceName, objectPath, interfaceName,
+                       QStringLiteral("graphAuthStateChanged"), this,
+                       SLOT(onRemoteGraphAuthStateChanged(QString,bool,QString,QString)));
     auto *watcher = new QDBusServiceWatcher(
         serviceName, connection,
         QDBusServiceWatcher::WatchForRegistration
@@ -132,6 +135,41 @@ void DriveBeaconServiceClient::synchronizeGraph()
     call(QStringLiteral("synchronizeGraph"));
 }
 
+void DriveBeaconServiceClient::beginGraphLogin(const QString &profileName,
+                                               const QString &clientId)
+{
+    if (!m_available) {
+        Q_EMIT graphLoginStarted(profileName, {},
+                                  QStringLiteral("DriveBeacon service is unavailable."));
+        return;
+    }
+    QDBusInterface service(serviceName, objectPath, interfaceName,
+                           QDBusConnection::sessionBus());
+    auto *watcher = new QDBusPendingCallWatcher(
+        service.asyncCall(QStringLiteral("beginGraphLogin"), profileName, clientId), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this,
+            [this, watcher, profileName] {
+                const QDBusPendingReply<QVariantMap> reply = *watcher;
+                if (reply.isError()) {
+                    Q_EMIT graphLoginStarted(profileName, {}, reply.error().message());
+                } else {
+                    const QVariantMap result = reply.value();
+                    Q_EMIT graphLoginStarted(
+                        profileName, result.value(QStringLiteral("authorizationUrl")).toString(),
+                        result.value(QStringLiteral("ok")).toBool()
+                            ? QString()
+                            : result.value(QStringLiteral("message")).toString());
+                }
+                watcher->deleteLater();
+            });
+}
+
+void DriveBeaconServiceClient::completeGraphLogin(const QString &profileName,
+                                                  const QString &responseUrl)
+{
+    call(QStringLiteral("completeGraphLogin"), {profileName, responseUrl});
+}
+
 void DriveBeaconServiceClient::forceRemoteResync(const QString &profileName)
 {
     call(QStringLiteral("forceRemoteResync"), {profileName});
@@ -203,6 +241,13 @@ void DriveBeaconServiceClient::onRemoteStatusChanged()
 void DriveBeaconServiceClient::onRemoteActivityMessage(const QString &message)
 {
     Q_EMIT activityMessage(message);
+}
+
+void DriveBeaconServiceClient::onRemoteGraphAuthStateChanged(
+    const QString &profileName, bool authenticated, const QString &errorMessage,
+    const QString &authorizationUrl)
+{
+    Q_EMIT graphAuthStateChanged(profileName, authenticated, errorMessage, authorizationUrl);
 }
 
 void DriveBeaconServiceClient::call(const QString &method, const QVariantList &arguments)

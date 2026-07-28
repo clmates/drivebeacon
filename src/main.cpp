@@ -185,7 +185,8 @@ int main(int argc, char *argv[])
     QObject::connect(clearActivityAction, &QAction::triggered,
                      controller.activities(), &ActivityModel::clear);
     QObject::connect(configurationAction, &QAction::triggered, &application, [&] {
-        auto *dialog = new ProfileDialog(controller.profileStore(), &controller, nullptr);
+        auto *dialog = new ProfileDialog(controller.profileStore(), &controller,
+                                         &serviceClient, nullptr);
         QObject::connect(dialog, &ProfileDialog::profileSaved, &application,
                          [&serviceClient](const QString &) {
                              if (serviceClient.available()) {

@@ -111,6 +111,12 @@ QVariantMap DriveBeaconService::reloadProfiles()
                 this, &DriveBeaconService::publishStatus);
         connect(controller, &OneDriveController::graphAuthChanged,
                 this, &DriveBeaconService::publishStatus);
+        connect(controller, &OneDriveController::graphAuthChanged, this,
+                [this, name, controller] {
+                    Q_EMIT graphAuthStateChanged(name, controller->graphAuthenticated(),
+                                                 controller->graphErrorMessage(),
+                                                 controller->graphAuthorizationUrl());
+                });
         // Mounts are service-owned runtime state, so a service restart drops
         // the helper process. Recreate the user's configured FUSE view as soon
         // as that profile has authenticated instead of requiring the tray to
@@ -469,6 +475,45 @@ QVariantMap DriveBeaconService::synchronizeGraph()
     }
     controller->synchronizeGraph();
     return operationResult(true, QStringLiteral("Synchronization requested."));
+}
+
+QVariantMap DriveBeaconService::beginGraphLogin(const QString &profileName,
+                                                const QString &clientId)
+{
+    const QString name = profileName.trimmed();
+    auto *controller = m_controllers.value(name, nullptr);
+    if (!controller) {
+        // A profile can have been saved by the tray moments before this call.
+        // Reload here as a small race-free bridge instead of requiring a tray
+        // restart or a second “Use this profile” operation.
+        reloadProfiles();
+        controller = m_controllers.value(name, nullptr);
+    }
+    if (!controller || controller->backendName() != QStringLiteral("graph")) {
+        return operationResult(false, QStringLiteral("Graph profile is not loaded."));
+    }
+    if (clientId.trimmed().isEmpty()) {
+        return operationResult(false, QStringLiteral("A Graph application client ID is required."));
+    }
+    controller->beginGraphLogin(clientId.trimmed());
+    QVariantMap result = operationResult(true, QStringLiteral("Graph sign-in started."));
+    result.insert(QStringLiteral("authorizationUrl"), controller->graphAuthorizationUrl());
+    return result;
+}
+
+QVariantMap DriveBeaconService::completeGraphLogin(const QString &profileName,
+                                                   const QString &responseUrl)
+{
+    const QString name = profileName.trimmed();
+    auto *controller = m_controllers.value(name, nullptr);
+    if (!controller) {
+        return operationResult(false, QStringLiteral("Graph profile is not loaded."));
+    }
+    if (responseUrl.trimmed().isEmpty()) {
+        return operationResult(false, QStringLiteral("A browser response URL is required."));
+    }
+    controller->completeGraphLogin(responseUrl.trimmed());
+    return operationResult(true, QStringLiteral("Graph sign-in completion requested."));
 }
 
 QVariantMap DriveBeaconService::forceRemoteResync(const QString &profileName)
