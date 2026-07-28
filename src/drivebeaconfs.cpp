@@ -57,6 +57,15 @@ FileSystemContext *context()
     return static_cast<FileSystemContext *>(fuse_get_context()->private_data);
 }
 
+/** Creates a thread-local D-Bus proxy because FUSE callbacks are multithreaded. */
+QDBusInterface serviceInterface()
+{
+    return QDBusInterface(QString::fromLatin1(serviceName),
+                          QString::fromLatin1(objectPath),
+                          QString::fromLatin1(interfaceName),
+                          QDBusConnection::sessionBus());
+}
+
 /** Normalizes a FUSE path before using it as a service-relative path. */
 QString relativePath(const char *path)
 {
@@ -247,7 +256,7 @@ bool statFromEntry(const QString &relative, const QVariantMap &entry, struct sta
 /** Reports a completed local mutation so the service starts upload/delete detection. */
 int notifyLocalChange()
 {
-    const QDBusMessage reply = context()->service.call(
+    const QDBusMessage reply = serviceInterface().call(
         QStringLiteral("notifyLocalChange"), context()->profile);
     return reply.type() == QDBusMessage::ErrorMessage ? -EIO : 0;
 }
@@ -255,7 +264,7 @@ int notifyLocalChange()
 /** Reports a local rename explicitly so folders retain their remote identity. */
 int notifyLocalRename(const QString &oldPath, const QString &newPath)
 {
-    const QDBusMessage reply = context()->service.call(
+    const QDBusMessage reply = serviceInterface().call(
         QStringLiteral("renameLocalPath"), context()->profile, oldPath, newPath);
     return reply.type() == QDBusMessage::ErrorMessage ? -EIO : 0;
 }
@@ -265,7 +274,7 @@ int requestMaterialization(const QString &relative, qint64 expectedSize)
     // The service may discover that a legacy zero-byte entry is a folder while
     // handling this request. Do not keep using the pre-request FUSE snapshot.
     context()->entrySnapshotValid = false;
-    const QDBusMessage reply = context()->service.call(
+    const QDBusMessage reply = serviceInterface().call(
         QStringLiteral("materializeFile"), context()->profile, relative);
     if (reply.type() == QDBusMessage::ErrorMessage) {
         return -EIO;
@@ -653,9 +662,9 @@ int main(int argc, char **argv)
     fuseArgs.reserve(static_cast<size_t>(argc) + 1);
     fuseArgs.push_back(argv[0]);
     fuseArgs.push_back(const_cast<char *>("-f"));
-    // The D-Bus proxy is owned by the main Qt thread. Keep FUSE callbacks in
-    // that same thread until the provider has an explicit per-thread proxy.
-    fuseArgs.push_back(const_cast<char *>("-s"));
+    // Use libfuse's multithreaded loop so one materialization wait does not
+    // block metadata and I/O requests for unrelated mounted files. D-Bus
+    // proxies are created per callback thread by serviceInterface().
     fuseArgs.push_back(argv[argc - 1]);
     // fuse_main() is the public libfuse entry point. Calling the lower-level
     // fuse_main_real() leaves a diagnostic and can create a mount that returns
