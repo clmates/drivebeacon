@@ -192,10 +192,21 @@ QList<QPair<QString, bool>> childrenOf(const QVariantList &entries, const QStrin
     const QFileInfoList localChildren = QDir(localPath(parent)).entryInfoList(
         QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden);
     for (const QFileInfo &child : localChildren) {
+        const QString name = child.fileName();
+        // The cache can contain desktop trash and editor lock files. They are
+        // local implementation details, not DriveBeacon remote entries; if
+        // exposed here, LibreOffice immediately asks Graph to materialize them.
+        if (name == QStringLiteral(".Trash")
+            || name.startsWith(QStringLiteral(".Trash-"), Qt::CaseInsensitive)
+            || name.endsWith(QStringLiteral(".part"), Qt::CaseInsensitive)
+            || name.endsWith(QStringLiteral(".tmp"), Qt::CaseInsensitive)
+            || name.startsWith(QStringLiteral(".~"))) {
+            continue;
+        }
         if (children.contains(child.fileName())) {
             continue;
         }
-        result.append({child.fileName(), child.isDir()});
+        result.append({name, child.isDir()});
     }
     qInfo().noquote() << "DriveBeacon FUSE: children" << parent << result.size();
     return result;
@@ -518,6 +529,20 @@ int fsUnlink(const char *path)
     return notifyLocalChange();
 }
 
+/** Removes an empty local directory without recursively deleting remote data. */
+int fsRmdir(const char *path)
+{
+    const QString relative = relativePath(path);
+    const QString directory = localPath(relative);
+    if (relative.isEmpty() || directory.isEmpty() || !QDir(directory).isEmpty()) {
+        return -ENOTEMPTY;
+    }
+    if (!QDir().rmdir(directory)) {
+        return -ENOENT;
+    }
+    return notifyLocalChange();
+}
+
 /** Renames cache content; GraphClient preserves the remote item ID when possible. */
 int fsRename(const char *from, const char *to, unsigned int flags)
 {
@@ -619,6 +644,7 @@ int main(int argc, char **argv)
     operations.flush = fsFlush;
     operations.fsync = fsFsync;
     operations.unlink = fsUnlink;
+    operations.rmdir = fsRmdir;
     operations.rename = fsRename;
     operations.mkdir = fsMkdir;
     operations.truncate = fsTruncate;

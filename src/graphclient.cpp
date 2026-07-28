@@ -116,6 +116,8 @@ bool isTransientLocalName(const QString &relativePath)
     const QString name = QFileInfo(relativePath).fileName();
     return name.endsWith(QStringLiteral(".part"), Qt::CaseInsensitive)
         || name.endsWith(QStringLiteral(".tmp"), Qt::CaseInsensitive)
+        || name == QStringLiteral(".Trash")
+        || name.startsWith(QStringLiteral(".Trash-"), Qt::CaseInsensitive)
         || name.startsWith(QStringLiteral(".~lock."))
         || name.startsWith(QStringLiteral(".~"));
 }
@@ -269,8 +271,43 @@ GraphClient::GraphClient(QObject *parent)
                         m_pendingUploads = std::move(remainingUploads);
                         Q_EMIT placeholderStateChanged(placeholderPaths());
                     }
-                    m_remotePathsById.remove(itemId);
-                    m_remoteItemIds.remove(oldPath);
+                    // A deleted driveItem can be a folder, and older
+                    // baselines may retain descendants under its former
+                    // prefix. Remove every related index entry so FUSE cannot
+                    // resurrect a stale file or directory after restart.
+                    const bool deletedFolder = m_remoteFolders.contains(oldPath)
+                        || m_remoteFolderIds.contains(oldPath);
+                    const QString deletedPrefix = oldPath + QLatin1Char('/');
+                    QStringList pathsToRemove;
+                    for (auto it = m_remoteItemIds.cbegin();
+                         it != m_remoteItemIds.cend(); ++it) {
+                        if (it.key() == oldPath
+                            || (deletedFolder && it.key().startsWith(deletedPrefix))) {
+                            pathsToRemove.append(it.key());
+                        }
+                    }
+                    for (const QString &path : std::as_const(pathsToRemove)) {
+                        m_remoteItemIds.remove(path);
+                        m_remoteFolderIds.remove(path);
+                        m_remoteFolders.remove(path);
+                        m_remoteSizes.remove(path);
+                        m_localSignatures.remove(path);
+                        m_localMetadata.remove(path);
+                        m_placeholderPaths.remove(path);
+                    }
+                    QStringList idsToRemove;
+                    for (auto it = m_remotePathsById.cbegin();
+                         it != m_remotePathsById.cend(); ++it) {
+                        if (it.key() == itemId
+                            || it.value() == oldPath
+                            || (deletedFolder && it.value().startsWith(deletedPrefix))) {
+                            idsToRemove.append(it.key());
+                        }
+                    }
+                    for (const QString &id : std::as_const(idsToRemove)) {
+                        m_remotePathsById.remove(id);
+                        m_remoteEtags.remove(id);
+                    }
                     handledDeltaIds.insert(itemId);
                     continue;
                 }
@@ -318,6 +355,25 @@ GraphClient::GraphClient(QObject *parent)
                                 }
                                 log(QStringLiteral("Graph sync: renamed local folder %1 → %2")
                                         .arg(oldPath, renamedPath));
+                            } else if (QFileInfo(localOldPath).isFile()
+                                       && (QFileInfo(localOldPath).size() == 0
+                                           || m_placeholderPaths.contains(oldPath))) {
+                                // Older folder renames could leave a zero-byte
+                                // file at the former folder path. It is only a
+                                // marker collision, so remove it before the
+                                // folder identity is remapped; real content is
+                                // never deleted implicitly.
+                                if (!QFile::remove(localOldPath)) {
+                                    Q_EMIT errorOccurred(QStringLiteral(
+                                        "Could not remove stale local folder marker: %1")
+                                                             .arg(oldPath));
+                                    continue;
+                                }
+                                m_placeholderPaths.remove(oldPath);
+                                m_localSignatures.remove(oldPath);
+                                m_localMetadata.remove(oldPath);
+                                log(QStringLiteral("Graph sync: removed stale local folder marker %1")
+                                        .arg(oldPath));
                             }
                             remapPathPrefix(oldPath, renamedPath);
                             m_remotePathsById.insert(itemId, renamedPath);
@@ -758,6 +814,42 @@ void GraphClient::queuePersistedMaterializations()
     }
     if (queued > 0) {
         log(QStringLiteral("Graph sync: resumed %1 Keep Local file(s) after restart").arg(queued));
+    }
+}
+
+void GraphClient::reconcileEnumeratedRemoteTree()
+{
+    QStringList staleIds;
+    for (auto it = m_remotePathsById.cbegin(); it != m_remotePathsById.cend(); ++it) {
+        if (it.key() != QLatin1String("root")
+            && !m_enumeratedRemoteIds.contains(it.key())) {
+            staleIds.append(it.key());
+        }
+    }
+    for (const QString &itemId : std::as_const(staleIds)) {
+        const QString path = m_remotePathsById.value(itemId);
+        if (path.isEmpty()) {
+            m_remotePathsById.remove(itemId);
+            m_remoteEtags.remove(itemId);
+            continue;
+        }
+        const QString localPath = safeLocalPath(path);
+        // Only remove an explicit placeholder from the cache. A legitimate
+        // local zero-byte file must survive reconciliation and be eligible
+        // for upload after the stale remote index entry is discarded.
+        if (QFileInfo(localPath).isFile() && m_placeholderPaths.contains(path)) {
+            QFile::remove(localPath);
+        }
+        m_remotePathsById.remove(itemId);
+        m_remoteEtags.remove(itemId);
+        m_remoteItemIds.remove(path);
+        m_remoteFolderIds.remove(path);
+        m_remoteFolders.remove(path);
+        m_remoteSizes.remove(path);
+        m_placeholderPaths.remove(path);
+        m_localSignatures.remove(path);
+        m_localMetadata.remove(path);
+        log(QStringLiteral("Graph sync: removed stale remote index entry %1").arg(path));
     }
 }
 
@@ -1231,6 +1323,8 @@ void GraphClient::synchronize(const QString &driveId, const QString &accessToken
     m_remoteItemIds.clear();
     m_remoteFolderIds.clear();
     m_remotePathsById.clear();
+    m_enumeratedRemoteIds.clear();
+    m_enumeratedRemoteIds.insert(QStringLiteral("root"));
     m_uploadInProgress = false;
     m_downloadedFiles = 0;
     m_totalFiles = 0;
@@ -1266,6 +1360,8 @@ void GraphClient::refreshSelectedFolders(const QString &driveId, const QString &
     m_excludedFolders = excludedFolders;
     m_pendingFolders.clear();
     m_pendingFiles.clear();
+    m_enumeratedRemoteIds.clear();
+    m_enumeratedRemoteIds.insert(QStringLiteral("root"));
     m_downloadedFiles = 0;
     m_totalFiles = 0;
     if (!QDir().mkpath(m_syncDirectory)) {
@@ -1283,6 +1379,7 @@ void GraphClient::refreshSelectedFolders(const QString &driveId, const QString &
 void GraphClient::processNextFolder()
 {
     if (m_pendingFolders.isEmpty()) {
+        reconcileEnumeratedRemoteTree();
         m_totalFiles = m_pendingFiles.size();
         // Keep this diagnostic beside the scheduler boundary: enumeration can
         // succeed while a stale service or a disabled materializer leaves the
@@ -1342,17 +1439,20 @@ void GraphClient::processNextFolder()
             }
             if (item.contains(QStringLiteral("folder"))) {
                 ++foldersFound;
+                const QString itemId = item.value(QStringLiteral("id")).toString();
+                m_enumeratedRemoteIds.insert(itemId);
                 m_remoteFolders.insert(relativePath);
                 m_remoteSizes.insert(relativePath, 0);
-                m_remotePathsById.insert(item.value(QStringLiteral("id")).toString(), relativePath);
-                m_remoteEtags.insert(item.value(QStringLiteral("id")).toString(),
+                m_remoteItemIds.insert(relativePath, itemId);
+                m_remotePathsById.insert(itemId, relativePath);
+                m_remoteEtags.insert(itemId,
                                      item.value(QStringLiteral("eTag")).toString());
                 const QString parentId = item.value(QStringLiteral("parentReference")).toObject()
                                              .value(QStringLiteral("id")).toString();
                 if (!parentId.isEmpty()) {
                     m_remotePathsById.insert(parentId, folder.relativePath);
                 }
-                m_remoteFolderIds.insert(relativePath, item.value(QStringLiteral("id")).toString());
+                m_remoteFolderIds.insert(relativePath, itemId);
                 const QString localPath = safeLocalPath(relativePath);
                 if (shouldMaterializePath(relativePath) && !localPath.isEmpty()
                     && !QDir().mkpath(localPath)) {
@@ -1360,11 +1460,12 @@ void GraphClient::processNextFolder()
                     return;
                 }
                 if (shouldTraverse(relativePath)) {
-                    m_pendingFolders.enqueue({item.value(QStringLiteral("id")).toString(), relativePath});
+                    m_pendingFolders.enqueue({itemId, relativePath});
                 }
             } else if (item.contains(QStringLiteral("file"))) {
                 ++filesFound;
                 const QString itemId = item.value(QStringLiteral("id")).toString();
+                m_enumeratedRemoteIds.insert(itemId);
                 const QString eTag = item.value(QStringLiteral("eTag")).toString();
                 const QFileInfo localInfo(safeLocalPath(relativePath));
                 const qint64 remoteSize = item.value(QStringLiteral("size")).toVariant().toLongLong();
@@ -1423,22 +1524,25 @@ void GraphClient::processNextFolder()
                     const QString relativePath = folder.relativePath.isEmpty()
                         ? name : folder.relativePath + QLatin1Char('/') + name;
                     if (item.contains(QStringLiteral("folder"))) {
+                        const QString itemId = item.value(QStringLiteral("id")).toString();
+                        m_enumeratedRemoteIds.insert(itemId);
                         m_remoteFolders.insert(relativePath);
                         m_remoteSizes.insert(relativePath, 0);
-                        m_remotePathsById.insert(item.value(QStringLiteral("id")).toString(),
-                                                 relativePath);
-                        m_remoteFolderIds.insert(relativePath, item.value(QStringLiteral("id")).toString());
+                        m_remoteItemIds.insert(relativePath, itemId);
+                        m_remotePathsById.insert(itemId, relativePath);
+                        m_remoteFolderIds.insert(relativePath, itemId);
                         if (isIncluded(relativePath)) {
                             const QString localPath = safeLocalPath(relativePath);
                             if (shouldMaterializePath(relativePath) && !localPath.isEmpty()) {
                                 QDir().mkpath(localPath);
                             }
                             if (shouldTraverse(relativePath)) {
-                                m_pendingFolders.enqueue({item.value(QStringLiteral("id")).toString(), relativePath});
+                                m_pendingFolders.enqueue({itemId, relativePath});
                             }
                         }
                     } else if (item.contains(QStringLiteral("file")) && isIncluded(relativePath)) {
                         const QString itemId = item.value(QStringLiteral("id")).toString();
+                        m_enumeratedRemoteIds.insert(itemId);
                         const QString eTag = item.value(QStringLiteral("eTag")).toString();
                         const QFileInfo localInfo(safeLocalPath(relativePath));
                         const qint64 remoteSize = item.value(QStringLiteral("size"))
@@ -1787,7 +1891,7 @@ void GraphClient::scanLocalChanges()
     while (folderIterator.hasNext()) {
         const QString localFolder = folderIterator.next();
         const QString relativeFolder = QDir(m_syncDirectory).relativeFilePath(localFolder);
-        if (isIncluded(relativeFolder)) {
+        if (isIncluded(relativeFolder) && !isTransientLocalName(relativeFolder)) {
             currentFolders.insert(relativeFolder);
         }
     }
@@ -1909,10 +2013,62 @@ void GraphClient::createNextRemoteFolder()
     }).toJson(QJsonDocument::Compact);
     log(QStringLiteral("Graph sync: creating remote folder %1").arg(folder));
     auto *reply = m_network.post(request, body);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, folder] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, folder, parentId] {
         const auto cleanup = qScopeGuard([reply] { reply->deleteLater(); });
         m_pendingRemoteFolderPaths.remove(folder);
         if (reply->error() != QNetworkReply::NoError) {
+            const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (status == 409) {
+                // The folder may have been created remotely while the local
+                // baseline was stale. Adopt that existing driveItem instead
+                // of retrying POST forever and blocking child uploads.
+                const QUrl lookupUrl(
+                    QStringLiteral("https://graph.microsoft.com/v1.0/drives/%1/items/%2/children")
+                        .arg(QString::fromUtf8(QUrl::toPercentEncoding(m_syncDriveId)),
+                             QString::fromUtf8(QUrl::toPercentEncoding(parentId)))
+                    + QStringLiteral("?$select=id,name,folder,eTag"));
+                auto *lookupReply = m_network.get(graphRequest(lookupUrl, m_syncToken.toUtf8()));
+                connect(lookupReply, &QNetworkReply::finished, this,
+                        [this, lookupReply, folder] {
+                    const auto lookupCleanup = qScopeGuard(
+                        [lookupReply] { lookupReply->deleteLater(); });
+                    bool adopted = false;
+                    if (lookupReply->error() == QNetworkReply::NoError) {
+                        const QJsonDocument document = QJsonDocument::fromJson(
+                            lookupReply->readAll());
+                        for (const QJsonValue &value
+                             : document.object().value(QStringLiteral("value")).toArray()) {
+                            const QJsonObject item = value.toObject();
+                            if (item.value(QStringLiteral("name")).toString()
+                                    != QFileInfo(folder).fileName()
+                                || !item.contains(QStringLiteral("folder"))) {
+                                continue;
+                            }
+                            const QString itemId = item.value(QStringLiteral("id")).toString();
+                            if (itemId.isEmpty()) {
+                                continue;
+                            }
+                            m_remoteFolders.insert(folder);
+                            m_remoteItemIds.insert(folder, itemId);
+                            m_remoteFolderIds.insert(folder, itemId);
+                            m_remotePathsById.insert(itemId, folder);
+                            m_remoteEtags.insert(itemId,
+                                                 item.value(QStringLiteral("eTag")).toString());
+                            log(QStringLiteral("Graph sync: adopted existing remote folder %1")
+                                    .arg(folder));
+                            adopted = true;
+                            break;
+                        }
+                    }
+                    if (!adopted) {
+                        Q_EMIT errorOccurred(QStringLiteral(
+                            "Could not resolve existing remote folder: %1").arg(folder));
+                    }
+                    m_folderCreateInProgress = false;
+                    processPendingLocalOperations();
+                });
+                return;
+            }
             Q_EMIT errorOccurred(networkError(reply,
                                               QStringLiteral("Could not create remote folder: %1")
                                                   .arg(folder)));

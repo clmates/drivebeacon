@@ -242,6 +242,8 @@ private:
     [[nodiscard]] bool shouldKeepRemotePath(const QString &relativePath) const;
     /** Requeues missing cached files covered by persisted KeepLocal policies. */
     void queuePersistedMaterializations();
+    /** Removes persisted remote entries absent from a completed enumeration. */
+    void reconcileEnumeratedRemoteTree();
     /** Moves every persisted path index below a renamed local/remote folder. */
     void remapPathPrefix(const QString &oldPath, const QString &newPath);
 
@@ -267,6 +269,8 @@ private:
     QHash<QString, QString> m_remoteFolderIds;
     /** Reverse identity index used to recognize remote renames in delta pages. */
     QHash<QString, QString> m_remotePathsById;
+    /** IDs observed during the current complete remote tree enumeration. */
+    QSet<QString> m_enumeratedRemoteIds;
     /** Last accepted remote eTag per item; unchanged delta entries are ignored. */
     QHash<QString, QString> m_remoteEtags;
     /** Remote sizes and folder markers used by FUSE stat/readdir responses. */
