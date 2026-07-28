@@ -26,6 +26,7 @@
 #include <fcntl.h>
 #include <memory>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 #include <vector>
 
@@ -327,6 +328,23 @@ int fsGetattr(const char *path, struct stat *st, struct fuse_file_info *)
         return -ENOENT;
     }
     return statFromEntry(relative, entry, st) ? 0 : -ENOENT;
+}
+
+/**
+ * Reports the backing filesystem capacity to copy tools such as Dolphin/KIO.
+ *
+ * FUSE otherwise exposes no usable capacity for this virtual tree and some
+ * clients interpret that missing result as zero free bytes before creating a
+ * destination file. Remote quota remains authoritative for Graph uploads;
+ * this callback only describes the local cache space available for writes.
+ */
+int fsStatfs(const char *, struct statvfs *stat)
+{
+    auto *fs = context();
+    if (!statvfs(fs->backingDirectory.toLocal8Bit().constData(), stat)) {
+        return 0;
+    }
+    return -errno;
 }
 
 /** Lists only the immediate children of a remote directory. */
@@ -645,6 +663,7 @@ int main(int argc, char **argv)
     }
     struct fuse_operations operations{};
     operations.getattr = fsGetattr;
+    operations.statfs = fsStatfs;
     operations.readdir = fsReaddir;
     operations.open = fsOpen;
     operations.create = fsCreate;

@@ -7,7 +7,7 @@
 
 #include <QNetworkAccessManager>
 #include <QUrl>
-#include <QSaveFile>
+#include <QFile>
 #include <QObject>
 #include <QQueue>
 #include <QHash>
@@ -16,6 +16,7 @@
 #include <QSet>
 #include <QPointer>
 #include <QVariantList>
+#include <QThreadPool>
 
 #include <memory>
 
@@ -203,6 +204,15 @@ private:
                                 const std::shared_ptr<DownloadTransfer> &transfer);
     /** Compares the filesystem with the persisted hash baseline. */
     void scanLocalChanges();
+    /** Queues one file hash without blocking Graph's event loop. */
+    void queueLocalHash(const QString &relativePath,
+                        const QString &localPath,
+                        const QPair<qint64, QDateTime> &metadata);
+    /** Accepts a worker result only if the file snapshot is still current. */
+    void finishLocalHash(const QString &relativePath,
+                         const QString &localPath,
+                         const QPair<qint64, QDateTime> &metadata,
+                         const QString &signature);
     /** Uploads the next local create or content update. */
     void uploadNextLocalFile();
     /** Creates the next local directory in Graph before child uploads run. */
@@ -242,6 +252,8 @@ private:
     [[nodiscard]] bool shouldKeepRemotePath(const QString &relativePath) const;
     /** Requeues missing cached files covered by persisted KeepLocal policies. */
     void queuePersistedMaterializations();
+    /** Requeues interrupted downloads represented by durable `.part` files. */
+    void queuePersistedPartialDownloads();
     /** Removes persisted remote entries absent from a completed enumeration. */
     void reconcileEnumeratedRemoteTree();
     /** Moves every persisted path index below a renamed local/remote folder. */
@@ -287,9 +299,16 @@ private:
      * are unchanged since the previous local scan.
      */
     QHash<QString, QPair<qint64, QDateTime>> m_localMetadata;
+    /** Paths currently being hashed by the dedicated low-priority worker pool. */
+    QSet<QString> m_hashingPaths;
+    /** Completed worker hashes waiting for the next scan to consume them. */
+    QHash<QString, QString> m_pendingHashResults;
+    QHash<QString, QPair<qint64, QDateTime>> m_pendingHashMetadata;
     /** Local polling and remote delta polling timers. */
     QTimer m_uploadTimer;
     QTimer m_remoteTimer;
+    /** Bounds disk-heavy hashing so it cannot consume all service workers. */
+    QThreadPool m_hashPool;
     /** False while a profile is paused; persisted state remains untouched. */
     bool m_monitoringEnabled = true;
     /** Opaque Graph delta cursor and credentials for subsequent polling. */
