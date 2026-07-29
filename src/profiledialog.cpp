@@ -353,7 +353,11 @@ void ProfileDialog::createProfile()
     m_nameEdit->setText(QStringLiteral("graph"));
     m_backendCombo->setCurrentIndex(m_backendCombo->findData(QStringLiteral("graph")));
     m_directoryEdit->setText(QDir::home().filePath(QStringLiteral("Onedrive-Graph")));
-    m_syncEnabledCheck->setChecked(true);
+    // New profiles must be configured before any Graph enumeration starts.
+    // The user can authenticate, refresh the remote folders, and save the
+    // selection while the profile remains paused; resuming is an explicit
+    // final step.
+    m_syncEnabledCheck->setChecked(false);
     m_globalSyncEnabledCheck->setChecked(m_store->globalSyncEnabled());
     m_concurrentDownloadsSpin->setValue(2);
     m_concurrentUploadsSpin->setValue(2);
@@ -376,6 +380,8 @@ void ProfileDialog::saveProfile()
                              i18n("A profile name and FUSE mount directory are required."));
         return;
     }
+
+    const bool isNewProfile = !m_store->profileNames().contains(name);
 
     // A deleted profile may have left its private cache intentionally. Never
     // reuse that state silently for a newly created profile with the same key.
@@ -412,7 +418,11 @@ void ProfileDialog::saveProfile()
     // as a backing directory and derives a private cache from the profile key.
     profile.localDirectory = profile.mountDirectory;
     profile.availability = LocalAvailability::OnDemand;
-    profile.syncEnabled = m_syncEnabledCheck->isChecked();
+    // Keep a newly created profile paused even if a caller changed the
+    // checkbox after the New template was shown. This prevents authentication
+    // or folder discovery from starting a first enumeration before the
+    // include/exclude policy has been saved.
+    profile.syncEnabled = !isNewProfile && m_syncEnabledCheck->isChecked();
     profile.remoteCheckIntervalSeconds = m_remoteIntervalSpin->value();
     profile.concurrentDownloads = m_concurrentDownloadsSpin->value();
     profile.concurrentUploads = m_concurrentUploadsSpin->value();
