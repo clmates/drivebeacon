@@ -52,7 +52,7 @@ struct SyncProfile {
     QString graphDeltaLink;
     /** Persisted `relativePath<TAB>sha256` local change baseline. */
     QStringList graphLocalSignatures;
-    /** Persisted `itemId<TAB>relativePath<TAB>eTag` remote identity baseline. */
+    /** Persisted remote identity baseline; folder entries end with `<TAB>folder`. */
     QStringList graphRemotePaths;
     /** Relative paths represented locally by zero-byte RemoteOnly placeholders. */
     QStringList graphPlaceholderPaths;

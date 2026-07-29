@@ -858,26 +858,36 @@ void GraphClient::initializeLocalMonitoring(const QStringList &signatures,
     m_remoteSizes.clear();
     m_remoteFolders.clear();
     for (const QString &entry : remotePaths) {
-        const int separator = entry.indexOf(QLatin1Char('\t'));
-        const int etagSeparator = entry.indexOf(QLatin1Char('\t'), separator + 1);
+        const bool folderMarker = entry.endsWith(QStringLiteral("\tfolder"));
+        const QString serialized = folderMarker
+            ? entry.left(entry.size() - QStringLiteral("\tfolder").size()) : entry;
+        const int separator = serialized.indexOf(QLatin1Char('\t'));
+        const int etagSeparator = serialized.indexOf(QLatin1Char('\t'), separator + 1);
         const int sizeSeparator = etagSeparator < 0
-            ? -1 : entry.indexOf(QLatin1Char('\t'), etagSeparator + 1);
+            ? -1 : serialized.indexOf(QLatin1Char('\t'), etagSeparator + 1);
         if (separator > 0) {
-            const QString itemId = entry.left(separator);
+            const QString itemId = serialized.left(separator);
             const QString path = etagSeparator < 0
-                ? entry.sliced(separator + 1)
-                : entry.sliced(separator + 1, etagSeparator - separator - 1);
+                ? serialized.sliced(separator + 1)
+                : serialized.sliced(separator + 1, etagSeparator - separator - 1);
             const QString etag = etagSeparator < 0 ? QString()
-                : entry.sliced(etagSeparator + 1,
-                               (sizeSeparator < 0 ? entry.size() : sizeSeparator)
+                : serialized.sliced(etagSeparator + 1,
+                               (sizeSeparator < 0 ? serialized.size() : sizeSeparator)
                                    - etagSeparator - 1);
             m_remotePathsById.insert(itemId, path);
             m_remoteEtags.insert(itemId, etag);
+            if (folderMarker) {
+                m_remoteFolders.insert(path);
+                m_remoteFolderIds.insert(path, itemId);
+            }
             if (sizeSeparator >= 0) {
-                bool sizeOk = false;
-                const qint64 size = entry.sliced(sizeSeparator + 1).toLongLong(&sizeOk);
-                if (sizeOk) {
-                    m_remoteSizes.insert(path, size);
+                if (!folderMarker) {
+                    bool sizeOk = false;
+                    const qint64 size = serialized.sliced(sizeSeparator + 1)
+                                             .toLongLong(&sizeOk);
+                    if (sizeOk) {
+                        m_remoteSizes.insert(path, size);
+                    }
                 }
             }
             if (!path.isEmpty() && path != QStringLiteral("/")) {
@@ -1057,7 +1067,12 @@ QStringList GraphClient::remotePaths() const
     for (auto it = m_remotePathsById.cbegin(); it != m_remotePathsById.cend(); ++it) {
         QString serialized = it.key() + QLatin1Char('\t') + it.value()
             + QLatin1Char('\t') + m_remoteEtags.value(it.key());
-        if (m_remoteSizes.contains(it.value())) {
+        if (m_remoteFolders.contains(it.value())) {
+            // Preserve empty remote folders across service restarts. Without
+            // this marker, a cache directory with no files is indistinguishable
+            // from a newly created local directory during the next scan.
+            serialized += QStringLiteral("\tfolder");
+        } else if (m_remoteSizes.contains(it.value())) {
             serialized += QLatin1Char('\t')
                 + QString::number(m_remoteSizes.value(it.value()));
         }
@@ -1469,6 +1484,7 @@ void GraphClient::synchronize(const QString &driveId, const QString &accessToken
     }
     m_syncDriveId = driveId;
     m_syncToken = accessToken;
+    m_remoteEnumerationInProgress = true;
     // A forced resync stops polling first to prevent local uploads from
     // racing the remote pull; the remote transfer scheduler must be enabled
     // again for the queued files to actually download.
@@ -1513,6 +1529,7 @@ void GraphClient::refreshSelectedFolders(const QString &driveId, const QString &
     // cursor. Enumeration is only a discovery pass for newly selected data.
     m_syncDriveId = driveId;
     m_syncToken = accessToken;
+    m_remoteEnumerationInProgress = true;
     m_syncDirectory = QDir::cleanPath(QFileInfo(localDirectory).absoluteFilePath());
     m_monitoringEnabled = true;
     m_includedFolders = includedFolders;
@@ -1538,6 +1555,7 @@ void GraphClient::refreshSelectedFolders(const QString &driveId, const QString &
 void GraphClient::processNextFolder()
 {
     if (m_pendingFolders.isEmpty()) {
+        m_remoteEnumerationInProgress = false;
         reconcileEnumeratedRemoteTree();
         m_totalFiles = m_pendingFiles.size();
         // Keep this diagnostic beside the scheduler boundary: enumeration can
@@ -2084,7 +2102,10 @@ void GraphClient::processDownloadedReply(QNetworkReply *reply,
 
 void GraphClient::scanLocalChanges()
 {
-    if (m_renameInProgress || m_syncDirectory.isEmpty()) {
+    if (m_renameInProgress || m_remoteEnumerationInProgress || m_syncDirectory.isEmpty()) {
+        // The cache is populated while the remote tree is being enumerated.
+        // Scanning it before the remote folder index is complete would mistake
+        // those intermediate directories for user-created local folders.
         return;
     }
     // Scanning must continue while transfers are active: a newly copied small

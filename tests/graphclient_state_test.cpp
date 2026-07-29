@@ -17,12 +17,16 @@ private Q_SLOTS:
     void roundTripsSeparateBaselines();
     /** Restores persisted remote sizes needed by on-demand materialization. */
     void restoresPersistedRemoteSize();
+    /** Restores empty remote folders so cache directories are not uploaded. */
+    void restoresPersistedEmptyFolder();
     /** Baselines written by the short-lived three-field local format remain usable. */
     void acceptsLegacyLocalBaseline();
     /** A KeepLocal folder policy must replace conflicting descendant policies. */
     void parentKeepLocalClearsDescendantReleasePolicy();
     /** Retry-After values are bounded and support HTTP-date form. */
     void parsesRetryAfterValues();
+    /** Provider backoff is never shortened below the requested Retry-After. */
+    void combinesRetryDelays();
 };
 
 void GraphClientStateTest::roundTripsSeparateBaselines()
@@ -56,6 +60,25 @@ void GraphClientStateTest::restoresPersistedRemoteSize()
     QCOMPARE(entries.first().toMap().value(QStringLiteral("size")).toLongLong(), 123LL);
 }
 
+void GraphClientStateTest::restoresPersistedEmptyFolder()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    GraphClient client;
+    client.initializeLocalMonitoring({},
+                                     {QStringLiteral("folder-a\tDocumentos\tetag-a\tfolder")},
+                                     directory.path());
+
+    const QVariantList entries = client.remoteEntries();
+    QCOMPARE(entries.size(), 1);
+    QCOMPARE(entries.first().toMap().value(QStringLiteral("path")).toString(),
+             QStringLiteral("Documentos"));
+    QVERIFY(entries.first().toMap().value(QStringLiteral("folder")).toBool());
+    QCOMPARE(client.remotePaths(),
+             QStringList({QStringLiteral("folder-a\tDocumentos\tetag-a\tfolder")}));
+}
+
 void GraphClientStateTest::acceptsLegacyLocalBaseline()
 {
     QTemporaryDir directory;
@@ -87,6 +110,14 @@ void GraphClientStateTest::parsesRetryAfterValues()
     QCOMPARE(graphRetryAfterSeconds(QByteArrayLiteral("99999"), now), 3600);
     QCOMPARE(graphRetryAfterSeconds(QByteArrayLiteral("Tue, 28 Jul 2026 12:00:12 GMT"), now), 12);
     QCOMPARE(graphRetryAfterSeconds(QByteArrayLiteral("invalid"), now), 5);
+}
+
+void GraphClientStateTest::combinesRetryDelays()
+{
+    QCOMPARE(graphRetryDelaySeconds(1, 0), 5);
+    QCOMPARE(graphRetryDelaySeconds(17, 0), 17);
+    QCOMPARE(graphRetryDelaySeconds(3600, 6), 3600);
+    QCOMPARE(graphRetryDelaySeconds(1, 99), 320);
 }
 
 QTEST_MAIN(GraphClientStateTest)

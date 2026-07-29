@@ -30,3 +30,12 @@ inline int graphRetryAfterSeconds(const QByteArray &header,
     // A malformed or missing header must still produce a bounded backoff.
     return 5;
 }
+
+/** Combines Microsoft's delay with a bounded local backoff between retries. */
+inline int graphRetryDelaySeconds(int retryAfterSeconds, int retryAttempt)
+{
+    const int providerDelay = qBound(1, retryAfterSeconds, 3600);
+    const int exponent = qBound(0, retryAttempt, 6);
+    const int localDelay = 5 * (1 << exponent);
+    return qMax(providerDelay, localDelay);
+}

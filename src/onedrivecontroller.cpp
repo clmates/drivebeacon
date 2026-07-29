@@ -3,6 +3,7 @@
 #include "onedrivecontroller.h"
 
 #include "activityparser.h"
+#include "graphretrypolicy.h"
 #include "tokenstore.h"
 
 #include <KLocalizedString>
@@ -188,16 +189,20 @@ OneDriveController::OneDriveController(const QString &profileName,
             });
     connect(&m_graphClient, &GraphClient::errorOccurred, this,
             [this](const QString &message) {
+                const bool throttled = message.contains(QStringLiteral("Graph (429)"),
+                                                        Qt::CaseInsensitive);
                 journalGraphError(QStringLiteral("Graph error: %1").arg(message));
-                m_activities.prepend({QDateTime::currentDateTimeUtc(), QStringLiteral("graph-log"),
-                                      {}, {}, QStringLiteral("Graph error: %1").arg(message), true});
                 if (retryGraphAuthentication(message)) {
                     return;
                 }
-                if (message.contains(QStringLiteral("Graph (429)"), Qt::CaseInsensitive)
-                    && m_graphRetryTimer.isActive()) {
+                if (throttled) {
+                    // A 429 is temporary provider back-pressure, not a
+                    // failed profile. retryableError has scheduled recovery
+                    // and updated the user-facing status already.
                     return;
                 }
+                m_activities.prepend({QDateTime::currentDateTimeUtc(), QStringLiteral("graph-log"),
+                                      {}, {}, QStringLiteral("Graph error: %1").arg(message), true});
                 setJournalError(message);
                 m_graphSyncStatus = QStringLiteral("Error: %1").arg(message);
                 Q_EMIT graphSyncChanged();
@@ -721,6 +726,8 @@ void OneDriveController::setGraphSyncEnabled(bool enabled)
     m_profileStore.save(m_profile);
     m_graphSyncEnabled = enabled && m_autoStartGraphSync && m_globalGraphSyncEnabled;
     if (!m_graphSyncEnabled) {
+        m_graphRetryTimer.stop();
+        m_graphRetryAttempt = 0;
         m_graphClient.stopMonitoring();
         m_graphSyncStatus = QStringLiteral("Paused");
         m_graphSyncProgress = 0;
@@ -793,6 +800,8 @@ void OneDriveController::setGlobalGraphSyncEnabled(bool enabled)
     }
     if (!shouldRun) {
         m_graphSyncEnabled = false;
+        m_graphRetryTimer.stop();
+        m_graphRetryAttempt = 0;
         m_graphClient.stopMonitoring();
         m_graphSyncStatus = QStringLiteral("Paused");
         m_graphSyncProgress = 0;
@@ -916,13 +925,16 @@ void OneDriveController::scheduleGraphRetry(int retryAfterSeconds)
     if (!graphAuthenticated()) {
         return;
     }
-    const int exponent = qMin(m_graphRetryAttempt, 6);
-    const int exponentialDelay = 5 * (1 << exponent);
-    const int delaySeconds = qMin(300, qMax(retryAfterSeconds, exponentialDelay));
+    const int delaySeconds = graphRetryDelaySeconds(retryAfterSeconds, m_graphRetryAttempt);
     ++m_graphRetryAttempt;
+    // Stop generating polling and upload requests while Graph applies
+    // back-pressure. Durable queues remain available for the retry.
+    m_graphClient.stopMonitoring();
     m_graphRetryTimer.start(delaySeconds * 1000);
-    m_graphSyncStatus = QStringLiteral("Waiting to retry Graph in %1 seconds")
+    m_graphErrorMessage.clear();
+    m_graphSyncStatus = QStringLiteral("Microsoft Graph is busy; retrying in %1 seconds")
                             .arg(delaySeconds);
+    Q_EMIT graphAuthChanged();
     Q_EMIT graphSyncChanged();
 }
 

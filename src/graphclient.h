@@ -317,6 +317,8 @@ private:
     QThreadPool m_hashPool;
     /** False while a profile is paused; persisted state remains untouched. */
     bool m_monitoringEnabled = true;
+    /** Prevents cache directories from being treated as local additions mid-enumeration. */
+    bool m_remoteEnumerationInProgress = false;
     /** Opaque Graph delta cursor and credentials for subsequent polling. */
     QString m_deltaDriveId;
     QString m_deltaToken;
