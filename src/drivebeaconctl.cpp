@@ -178,6 +178,7 @@ int main(int argc, char *argv[])
                        "<start|stop|restart>; mount <name>; "
                        "unmount <name>; materialize <name> <relative-path>; "
                        "keep-local <name> <relative-path>; "
+                       "on-demand <name> <relative-path>; "
                        "evict <name> <relative-path>"));
     parser.process(application);
 
@@ -222,6 +223,10 @@ int main(int argc, char *argv[])
     }
     if (command == QStringLiteral("keep-local") && arguments.size() == 3) {
         return callServiceMethod(QStringLiteral("keepLocalPath"),
+                                 {arguments.at(1), arguments.at(2)});
+    }
+    if (command == QStringLiteral("on-demand") && arguments.size() == 3) {
+        return callServiceMethod(QStringLiteral("onDemandPath"),
                                  {arguments.at(1), arguments.at(2)});
     }
     if (command == QStringLiteral("evict") && arguments.size() == 3) {

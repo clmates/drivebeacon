@@ -627,6 +627,7 @@ void GraphClient::startRemoteMonitoring(const QString &driveId, const QString &a
     // schedulers so that resuming continues that page before polling again.
     startPendingDownloads();
     startPendingUploads();
+    processPendingLocalOperations();
 }
 
 void GraphClient::stopMonitoring()
@@ -2289,6 +2290,11 @@ void GraphClient::finishLocalHash(const QString &relativePath,
 
 void GraphClient::processPendingLocalOperations()
 {
+    if (!m_monitoringEnabled) {
+        // Pausing must stop the mutation chain after the current network
+        // callback; keep queued work so resume can continue it safely.
+        return;
+    }
     if (m_folderCreateInProgress || !m_pendingRemoteFolders.isEmpty()) {
         createNextRemoteFolder();
         return;
@@ -2303,7 +2309,7 @@ void GraphClient::processPendingLocalOperations()
 
 void GraphClient::createNextRemoteFolder()
 {
-    if (m_folderCreateInProgress || m_pendingRemoteFolders.isEmpty()) {
+    if (!m_monitoringEnabled || m_folderCreateInProgress || m_pendingRemoteFolders.isEmpty()) {
         return;
     }
     const QString folder = m_pendingRemoteFolders.dequeue();
@@ -2344,17 +2350,42 @@ void GraphClient::createNextRemoteFolder()
                 const QUrl lookupUrl(
                     QStringLiteral("https://graph.microsoft.com/v1.0/drives/%1/items/%2/children")
                         .arg(QString::fromUtf8(QUrl::toPercentEncoding(m_syncDriveId)),
-                             QString::fromUtf8(QUrl::toPercentEncoding(parentId)))
-                    + QStringLiteral("?$select=id,name,folder,eTag"));
-                auto *lookupReply = m_network.get(graphRequest(lookupUrl, m_syncToken.toUtf8()));
-                connect(lookupReply, &QNetworkReply::finished, this,
-                        [this, lookupReply, folder] {
-                    const auto lookupCleanup = qScopeGuard(
-                        [lookupReply] { lookupReply->deleteLater(); });
-                    bool adopted = false;
-                    if (lookupReply->error() == QNetworkReply::NoError) {
+                             QString::fromUtf8(QUrl::toPercentEncoding(parentId))));
+                auto lookupPage = std::make_shared<std::function<void(const QUrl &)>>();
+                *lookupPage = [this, lookupPage, folder](const QUrl &pageUrl) {
+                    QUrl requestUrl(pageUrl);
+                    if (requestUrl.query().isEmpty()) {
+                        QUrlQuery query(requestUrl);
+                        query.addQueryItem(QStringLiteral("$select"),
+                                           QStringLiteral("id,name,folder,eTag"));
+                        requestUrl.setQuery(query);
+                    }
+                    auto *lookupReply = m_network.get(
+                        graphRequest(requestUrl, m_syncToken.toUtf8()));
+                    connect(lookupReply, &QNetworkReply::finished, this,
+                            [this, lookupReply, lookupPage, folder] {
+                        const auto lookupCleanup = qScopeGuard(
+                            [lookupReply] { lookupReply->deleteLater(); });
+                        if (lookupReply->error() != QNetworkReply::NoError) {
+                            Q_EMIT errorOccurred(networkError(
+                                lookupReply,
+                                QStringLiteral("Could not resolve existing remote folder: %1")
+                                    .arg(folder)));
+                            m_folderCreateInProgress = false;
+                            processPendingLocalOperations();
+                            return;
+                        }
+                        QJsonParseError parseError;
                         const QJsonDocument document = QJsonDocument::fromJson(
-                            lookupReply->readAll());
+                            lookupReply->readAll(), &parseError);
+                        if (parseError.error != QJsonParseError::NoError
+                            || !document.isObject()) {
+                            Q_EMIT errorOccurred(QStringLiteral(
+                                "Could not resolve existing remote folder: %1").arg(folder));
+                            m_folderCreateInProgress = false;
+                            processPendingLocalOperations();
+                            return;
+                        }
                         for (const QJsonValue &value
                              : document.object().value(QStringLiteral("value")).toArray()) {
                             const QJsonObject item = value.toObject();
@@ -2375,17 +2406,24 @@ void GraphClient::createNextRemoteFolder()
                                                  item.value(QStringLiteral("eTag")).toString());
                             log(QStringLiteral("Graph sync: adopted existing remote folder %1")
                                     .arg(folder));
-                            adopted = true;
-                            break;
+                            m_folderCreateInProgress = false;
+                            processPendingLocalOperations();
+                            return;
                         }
-                    }
-                    if (!adopted) {
+                        const QString nextLink = document.object()
+                                                      .value(QStringLiteral("@odata.nextLink"))
+                                                      .toString();
+                        if (!nextLink.isEmpty()) {
+                            (*lookupPage)(QUrl(nextLink));
+                            return;
+                        }
                         Q_EMIT errorOccurred(QStringLiteral(
                             "Could not resolve existing remote folder: %1").arg(folder));
-                    }
-                    m_folderCreateInProgress = false;
-                    processPendingLocalOperations();
-                });
+                        m_folderCreateInProgress = false;
+                        processPendingLocalOperations();
+                    });
+                };
+                (*lookupPage)(lookupUrl);
                 return;
             }
             Q_EMIT errorOccurred(networkError(reply,

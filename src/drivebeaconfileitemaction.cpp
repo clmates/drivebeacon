@@ -134,6 +134,20 @@ public:
                          });
         result.append(keepLocal);
 
+        auto *onDemand = new QAction(QIcon::fromTheme(QStringLiteral("cloud")),
+                                     i18n("DriveBeacon – On Demand"), this);
+        onDemand->setToolTip(i18n(
+            "Use the cache on demand without removing existing local content (%1)")
+                                  .arg(state));
+        QObject::connect(onDemand, &QAction::triggered, this,
+                         [this, profile = matchedProfile->profileName, paths] {
+                             if (!startDriveBeaconCtl(QStringLiteral("on-demand"), profile,
+                                                       paths)) {
+                                 Q_EMIT error(i18n("Could not start drivebeaconctl."));
+                             }
+                         });
+        result.append(onDemand);
+
         auto *evict = new QAction(QIcon::fromTheme(QStringLiteral("drive-harddisk")),
                                   i18n("DriveBeacon – Release Local cache"), this);
         evict->setToolTip(i18n("Release cached content using profile %1 (%2)")

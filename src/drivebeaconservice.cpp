@@ -242,6 +242,22 @@ QVariantMap DriveBeaconService::keepLocalPath(const QString &profileName,
     return operationResult(true, QStringLiteral("Keep Local applied."));
 }
 
+QVariantMap DriveBeaconService::onDemandPath(const QString &profileName,
+                                             const QString &relativePath)
+{
+    auto *controller = m_controllers.value(profileName.trimmed(), nullptr);
+    if (!controller) {
+        return operationResult(false, QStringLiteral("Profile is not loaded."));
+    }
+    if (relativePath.trimmed().isEmpty()) {
+        return operationResult(false, QStringLiteral("A relative path is required."));
+    }
+    // Changing policy alone deliberately leaves existing cache files intact;
+    // the normal cache eviction policy releases them later based on usage.
+    controller->setGraphPathPolicy(relativePath, QStringLiteral("on-demand"));
+    return operationResult(true, QStringLiteral("On-demand policy applied; existing cache preserved."));
+}
+
 QVariantMap DriveBeaconService::evictPath(const QString &profileName,
                                           const QString &relativePath)
 {

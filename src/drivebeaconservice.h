@@ -81,6 +81,8 @@ public Q_SLOTS:
     QVariantMap materializeFile(const QString &profileName, const QString &relativePath);
     /** Marks one file/folder KeepLocal and materializes folder descendants. */
     QVariantMap keepLocalPath(const QString &profileName, const QString &relativePath);
+    /** Changes one file/folder to OnDemand without evicting existing cache data. */
+    QVariantMap onDemandPath(const QString &profileName, const QString &relativePath);
     /** Releases one cached file or folder without changing remote content. */
     QVariantMap evictPath(const QString &profileName, const QString &relativePath);
     /** Deletes local profile state, optionally including its private cache. */
