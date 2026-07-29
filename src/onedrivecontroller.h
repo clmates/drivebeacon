@@ -224,6 +224,8 @@ private:
     bool m_globalGraphSyncEnabled = true;
     /** Effective runtime state after combining both pause switches and ownership. */
     bool m_graphSyncEnabled = true;
+    /** True while an interactive login may belong to a different account/drive. */
+    bool m_graphInteractiveLoginPending = false;
     /** True when a force-remote request waits for current transfers to finish. */
     bool m_forceRemoteResyncPending = false;
     /** Prevents repeated 401 responses from starting an unbounded refresh loop. */

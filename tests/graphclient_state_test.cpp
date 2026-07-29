@@ -27,6 +27,8 @@ private Q_SLOTS:
     void parsesRetryAfterValues();
     /** Provider backoff is never shortened below the requested Retry-After. */
     void combinesRetryDelays();
+    /** Invalid delta cursors are recognized as recoverable baseline failures. */
+    void recognizesInvalidDeltaCursor();
 };
 
 void GraphClientStateTest::roundTripsSeparateBaselines()
@@ -118,6 +120,14 @@ void GraphClientStateTest::combinesRetryDelays()
     QCOMPARE(graphRetryDelaySeconds(17, 0), 17);
     QCOMPARE(graphRetryDelaySeconds(3600, 6), 3600);
     QCOMPARE(graphRetryDelaySeconds(1, 99), 320);
+}
+
+void GraphClientStateTest::recognizesInvalidDeltaCursor()
+{
+    QVERIFY(graphDeltaCursorIsInvalid(
+        QStringLiteral("Graph (400): Resource not found for the segment 'delta'.")));
+    QVERIFY(!graphDeltaCursorIsInvalid(QStringLiteral("Graph (400): Bad request.")));
+    QVERIFY(!graphDeltaCursorIsInvalid(QStringLiteral("Graph (404): delta not found.")));
 }
 
 QTEST_MAIN(GraphClientStateTest)

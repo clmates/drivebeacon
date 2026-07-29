@@ -94,6 +94,16 @@ OneDriveController::OneDriveController(const QString &profileName,
             this, &OneDriveController::retryGraphSynchronization);
     connect(&m_graphAuth, &DeviceLoginAuth::authenticated, this,
             [this](const OAuthTokens &tokens) {
+                const bool interactiveLogin = m_graphInteractiveLoginPending;
+                m_graphInteractiveLoginPending = false;
+                if (interactiveLogin) {
+                    // A fresh browser login may select a different Microsoft
+                    // account. The old delta cursor must not be reused until
+                    // the current account's drive has been checked.
+                    m_graphClient.stopMonitoring();
+                    m_profile.graphDeltaLink.clear();
+                    m_profileStore.save(m_profile);
+                }
                 m_graphTokens = tokens;
                 m_lastUnauthorizedRefresh = {};
                 scheduleGraphTokenRefresh(tokens.expiresInSeconds);
@@ -105,7 +115,7 @@ OneDriveController::OneDriveController(const QString &profileName,
                 }
                 m_graphAuthorizationUrl.clear();
                 Q_EMIT graphAuthChanged();
-                if (m_profile.remoteDriveId.isEmpty()) {
+                if (interactiveLogin || m_profile.remoteDriveId.isEmpty()) {
                     m_graphClient.fetchCurrentDrive(m_graphTokens.accessToken);
                 } else {
                     m_graphClient.fetchQuota(m_profile.remoteDriveId, m_graphTokens.accessToken);
@@ -114,6 +124,7 @@ OneDriveController::OneDriveController(const QString &profileName,
             });
     connect(&m_graphAuth, &DeviceLoginAuth::errorOccurred, this,
             [this](const QString &message) {
+                m_graphInteractiveLoginPending = false;
                 m_graphErrorMessage = message;
                 // Do not keep polling Graph with the rejected bearer token.
                 // The persisted sync flag remains enabled so a successful
@@ -193,6 +204,23 @@ OneDriveController::OneDriveController(const QString &profileName,
                                                         Qt::CaseInsensitive);
                 journalGraphError(QStringLiteral("Graph error: %1").arg(message));
                 if (retryGraphAuthentication(message)) {
+                    return;
+                }
+                if (graphDeltaCursorIsInvalid(message)) {
+                    // Delta cursors are opaque and can become invalid after an
+                    // account/drive change or provider-side cursor expiry.
+                    // Rebuild the durable baseline instead of polling the same
+                    // rejected URL every interval.
+                    m_profile.graphDeltaLink.clear();
+                    m_profileStore.save(m_profile);
+                    m_graphClient.stopMonitoring();
+                    refreshGraphFolders();
+                    if (m_graphSyncEnabled) {
+                        m_graphSyncStatus = QStringLiteral(
+                            "Rebuilding the remote baseline after an invalid Graph cursor");
+                        Q_EMIT graphSyncChanged();
+                        QTimer::singleShot(0, this, &OneDriveController::synchronizeGraph);
+                    }
                     return;
                 }
                 if (throttled) {
@@ -651,6 +679,8 @@ void OneDriveController::clearError()
 
 void OneDriveController::beginGraphLogin(const QString &clientId)
 {
+    m_graphInteractiveLoginPending = true;
+    m_graphClient.stopMonitoring();
     m_graphErrorMessage.clear();
     m_graphAuthorizationUrl.clear();
     Q_EMIT graphAuthChanged();
@@ -659,6 +689,7 @@ void OneDriveController::beginGraphLogin(const QString &clientId)
 
 void OneDriveController::cancelGraphLogin()
 {
+    m_graphInteractiveLoginPending = false;
     m_graphAuth.cancel();
     m_graphErrorMessage.clear();
     m_graphAuthorizationUrl.clear();

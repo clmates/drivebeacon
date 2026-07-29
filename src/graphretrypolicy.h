@@ -39,3 +39,10 @@ inline int graphRetryDelaySeconds(int retryAfterSeconds, int retryAttempt)
     const int localDelay = 5 * (1 << exponent);
     return qMax(providerDelay, localDelay);
 }
+
+/** Recognizes an invalid Graph delta cursor that requires a baseline rebuild. */
+inline bool graphDeltaCursorIsInvalid(const QString &message)
+{
+    return message.contains(QStringLiteral("Graph (400)"), Qt::CaseInsensitive)
+        && message.contains(QStringLiteral("delta"), Qt::CaseInsensitive);
+}
