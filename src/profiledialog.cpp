@@ -569,6 +569,20 @@ void ProfileDialog::updateSelectedServiceProfileState()
 void ProfileDialog::refreshRemoteFolders()
 {
     const QString profileName = m_nameEdit->text().trimmed();
+    // The service owns Graph profiles, including paused ones. Folder discovery
+    // is configuration metadata and must remain available independently of
+    // the profile's synchronization switch; using the tray compatibility
+    // controller here loses the result when both names happen to match.
+    if (m_serviceClient && m_serviceClient->available()
+        && m_serviceClient->graphProfiles().contains(profileName)) {
+        const QVariantMap status = m_serviceClient->profileStatus(profileName);
+        if (!status.value(QStringLiteral("authenticated")).toBool()) {
+            return;
+        }
+        m_folderTree->clear();
+        m_serviceClient->refreshGraphFolders(profileName);
+        return;
+    }
     if (profileName == m_controller->profileName()) {
         if (!m_controller->graphAuthenticated()) {
             return;
@@ -646,8 +660,7 @@ void ProfileDialog::populateRemoteFolders()
 void ProfileDialog::updateSelectedServiceFolders(const QString &profileName,
                                                  const QStringList &folders)
 {
-    if (profileName != m_nameEdit->text().trimmed()
-        || profileName == m_controller->profileName()) {
+    if (profileName != m_nameEdit->text().trimmed()) {
         return;
     }
     m_remoteFolders = folders;
