@@ -831,6 +831,7 @@ void GraphClient::initializeLocalMonitoring(const QStringList &signatures,
                                             const QStringList &remotePaths,
                                             const QString &localDirectory)
 {
+    m_bootstrapBaseline = signatures.isEmpty() || remotePaths.isEmpty();
     m_syncDirectory = QDir::cleanPath(QFileInfo(localDirectory).absoluteFilePath());
     m_localSignatures.clear();
     m_localMetadata.clear();
@@ -1647,13 +1648,27 @@ void GraphClient::processNextFolder()
                 const QString eTag = item.value(QStringLiteral("eTag")).toString();
                 const QFileInfo localInfo(safeLocalPath(relativePath));
                 const qint64 remoteSize = item.value(QStringLiteral("size")).toVariant().toLongLong();
-                const bool localBaselineMatches = localInfo.isFile()
-                    && m_localSignatures.value(relativePath) == localFileSignature(localInfo.absoluteFilePath());
                 const bool sizeMatches = remoteSize < 0 || localInfo.size() == remoteSize;
+                const QString localSignature = localInfo.isFile()
+                    ? localFileSignature(localInfo.absoluteFilePath()) : QString();
+                const bool localBaselineMatches = localInfo.isFile()
+                    && m_localSignatures.value(relativePath) == localSignature;
+                const bool adoptExistingLocal = m_bootstrapBaseline && localInfo.isFile()
+                    && sizeMatches && !m_placeholderPaths.contains(relativePath);
+                if (adoptExistingLocal) {
+                    // An empty baseline cannot distinguish a pre-existing local
+                    // cache from a new user file. During bootstrap, a same-sized
+                    // file at a known remote path is adopted as the baseline;
+                    // it must not be uploaded merely because the old baseline
+                    // was unavailable after a restart or migration.
+                    m_localSignatures.insert(relativePath, localSignature);
+                    m_localMetadata.insert(relativePath,
+                                           {localInfo.size(), localInfo.lastModified()});
+                }
                 const bool alreadyCurrent = !m_placeholderPaths.contains(relativePath)
                     && m_remoteItemIds.value(relativePath) == itemId
                     && m_remoteEtags.value(itemId) == eTag
-                    && localBaselineMatches && sizeMatches;
+                    && (localBaselineMatches || adoptExistingLocal) && sizeMatches;
                 m_remotePathsById.insert(itemId, relativePath);
                 m_remoteEtags.insert(itemId, eTag);
                 m_remoteItemIds.insert(relativePath, itemId);
@@ -1725,14 +1740,22 @@ void GraphClient::processNextFolder()
                         const QFileInfo localInfo(safeLocalPath(relativePath));
                         const qint64 remoteSize = item.value(QStringLiteral("size"))
                                                       .toVariant().toLongLong();
-                        const bool localBaselineMatches = localInfo.isFile()
-                            && m_localSignatures.value(relativePath)
-                                   == localFileSignature(localInfo.absoluteFilePath());
                         const bool sizeMatches = remoteSize < 0 || localInfo.size() == remoteSize;
+                        const QString localSignature = localInfo.isFile()
+                            ? localFileSignature(localInfo.absoluteFilePath()) : QString();
+                        const bool localBaselineMatches = localInfo.isFile()
+                            && m_localSignatures.value(relativePath) == localSignature;
+                        const bool adoptExistingLocal = m_bootstrapBaseline && localInfo.isFile()
+                            && sizeMatches && !m_placeholderPaths.contains(relativePath);
+                        if (adoptExistingLocal) {
+                            m_localSignatures.insert(relativePath, localSignature);
+                            m_localMetadata.insert(relativePath,
+                                                   {localInfo.size(), localInfo.lastModified()});
+                        }
                         const bool alreadyCurrent = !m_placeholderPaths.contains(relativePath)
                             && m_remoteItemIds.value(relativePath) == itemId
                             && m_remoteEtags.value(itemId) == eTag
-                            && localBaselineMatches && sizeMatches;
+                            && (localBaselineMatches || adoptExistingLocal) && sizeMatches;
                         m_remotePathsById.insert(itemId, relativePath);
                         m_remoteEtags.insert(itemId, eTag);
                         m_remoteItemIds.insert(relativePath, itemId);
@@ -1792,6 +1815,7 @@ void GraphClient::processNextFile()
         Q_EMIT syncProgress(100, {});
         Q_EMIT syncFinished();
         Q_EMIT localStateChanged(localSignatures(), remotePaths());
+        m_bootstrapBaseline = false;
         if (m_monitoringEnabled && !m_uploadTimer.isActive()) {
             scanLocalChanges();
             m_uploadTimer.start();

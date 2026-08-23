@@ -319,6 +319,8 @@ private:
     bool m_monitoringEnabled = true;
     /** Prevents cache directories from being treated as local additions mid-enumeration. */
     bool m_remoteEnumerationInProgress = false;
+    /** True while an empty persisted baseline is being rebuilt from Graph. */
+    bool m_bootstrapBaseline = false;
     /** Opaque Graph delta cursor and credentials for subsequent polling. */
     QString m_deltaDriveId;
     QString m_deltaToken;
