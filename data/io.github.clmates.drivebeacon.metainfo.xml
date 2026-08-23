@@ -29,6 +29,13 @@
   </provides>
   <url type="homepage">https://github.com/clmates/drivebeacon</url>
   <url type="bugtracker">https://github.com/clmates/drivebeacon/issues</url>
+  <releases>
+    <release version="1.0.15" date="2026-08-23">
+      <description>
+        <p>Improve FUSE metadata handling and persist adopted remote folders.</p>
+      </description>
+    </release>
+  </releases>
   <developer id="github.com/clmates">
     <name>DriveBeacon contributors</name>
   </developer>

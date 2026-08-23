@@ -47,6 +47,13 @@ Use short, imperative commit subjects consistent with the existing history (for 
 
 Release tags use the `vMAJOR.MINOR.PATCH` format (for example, `v0.1.1`) and must be annotated tags pointing at the release commit. Keep a matching bare version tag only when compatibility with an already-published release requires it; new releases should use the `v`-prefixed form consistently.
 
+For every versioned correction or release, keep the user-visible About information
+and release metadata synchronized with the tagged version. The About dialog version
+must come from `PROJECT_VERSION`/`DRIVEBEACON_VERSION`, the Dolphin plugin metadata
+must use the same version, and `data/io.github.clmates.drivebeacon.metainfo.xml`
+must contain a matching AppStream release entry. Verify that no stale version
+remains in these files before creating the annotated tag.
+
 Never commit directly to the `prod` branch, even if the user explicitly authorizes or requests it. Before committing, verify the current branch. Commits are permitted only on `test` or on a dedicated branch for a specific feature, preferably named `feature/<short-description>`. Move changes to production exclusively through the repository's review and merge process.
 
 ## AUR Packaging
