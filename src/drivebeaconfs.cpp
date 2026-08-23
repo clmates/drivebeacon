@@ -713,7 +713,9 @@ void *fsInit(struct fuse_conn_info *, struct fuse_config *config)
     config->attr_timeout = 1.0;
     config->entry_timeout = 1.0;
     config->negative_timeout = 1.0;
-    return nullptr;
+    // libfuse uses the init return value as the operation private data.
+    // Preserve the FileSystemContext supplied to fuse_main().
+    return fuse_get_context()->private_data;
 }
 
 /** Lets the kernel reuse a completed directory enumeration briefly. */
