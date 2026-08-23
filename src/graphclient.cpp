@@ -2460,6 +2460,10 @@ void GraphClient::createNextRemoteFolder()
                                                  item.value(QStringLiteral("eTag")).toString());
                             log(QStringLiteral("Graph sync: adopted existing remote folder %1")
                                     .arg(folder));
+                            // Persist the recovered folder identity so the
+                            // next restart does not retry a create request for
+                            // a folder that already exists remotely.
+                            Q_EMIT localStateChanged(localSignatures(), remotePaths());
                             m_folderCreateInProgress = false;
                             processPendingLocalOperations();
                             return;
