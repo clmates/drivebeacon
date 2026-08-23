@@ -16,6 +16,9 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QMap>
+#include <QHash>
+#include <QMutex>
+#include <QMutexLocker>
 
 #define FUSE_USE_VERSION 35
 #include <fuse3/fuse.h>
@@ -36,10 +39,23 @@ constexpr auto objectPath = "/io/github/clmates/DriveBeacon";
 constexpr auto interfaceName = "io.github.clmates.DriveBeacon1";
 
 struct FileSystemContext {
+    FileSystemContext(const QString &profileValue, const QString &backingDirectoryValue)
+        : profile(profileValue)
+        , backingDirectory(backingDirectoryValue)
+        , service(QString::fromLatin1(serviceName),
+                  QString::fromLatin1(objectPath),
+                  QString::fromLatin1(interfaceName),
+                  QDBusConnection::sessionBus())
+    {
+    }
+
     QString profile;
     QString backingDirectory;
     QDBusInterface service;
     QVariantList entrySnapshot;
+    QHash<QString, QVariantMap> entriesByPath;
+    QHash<QString, QList<QPair<QString, bool>>> childrenByPath;
+    QMutex snapshotMutex;
     qint64 entrySnapshotTimestampMs = 0;
     bool entrySnapshotValid = false;
 };
@@ -56,6 +72,22 @@ struct OpenFile {
 FileSystemContext *context()
 {
     return static_cast<FileSystemContext *>(fuse_get_context()->private_data);
+}
+
+/** Invalidates metadata after a materialization so later lookups refresh it. */
+void invalidateEntrySnapshot()
+{
+    auto *fs = context();
+    QMutexLocker locker(&fs->snapshotMutex);
+    fs->entrySnapshotValid = false;
+}
+
+/** Reads snapshot validity under the same lock used by snapshot replacement. */
+bool hasEntrySnapshot()
+{
+    auto *fs = context();
+    QMutexLocker locker(&fs->snapshotMutex);
+    return fs->entrySnapshotValid;
 }
 
 /** Creates a thread-local D-Bus proxy because FUSE callbacks are multithreaded. */
@@ -83,6 +115,9 @@ QString localPath(const QString &relative)
     return QDir(context()->backingDirectory).filePath(relative);
 }
 
+/** Converts one D-Bus a{sv} record into a map usable by the FUSE tree. */
+QVariantMap entryMap(const QVariant &value);
+
 /** Reads the last enumerated remote tree from the headless service. */
 QVariantList remoteEntries()
 {
@@ -91,8 +126,11 @@ QVariantList remoteEntries()
     // Dolphin commonly asks for the same directory metadata repeatedly while
     // opening a view. Keep one short-lived snapshot so those callbacks do not
     // serialize a D-Bus round trip for every file.
-    if (fs->entrySnapshotValid && now - fs->entrySnapshotTimestampMs < 2000) {
-        return fs->entrySnapshot;
+    {
+        QMutexLocker locker(&fs->snapshotMutex);
+        if (fs->entrySnapshotValid && now - fs->entrySnapshotTimestampMs < 2000) {
+            return fs->entrySnapshot;
+        }
     }
 
     QDBusMessage request = QDBusMessage::createMethodCall(
@@ -107,10 +145,54 @@ QVariantList remoteEntries()
                              << reply.error().message();
         return {};
     }
-    fs->entrySnapshot = reply.value();
-    fs->entrySnapshotTimestampMs = now;
-    fs->entrySnapshotValid = true;
-    return fs->entrySnapshot;
+    const QVariantList entries = reply.value();
+    QHash<QString, QVariantMap> entriesByPath;
+    QHash<QString, QMap<QString, bool>> childrenByPath;
+    for (const QVariant &value : entries) {
+        const QVariantMap entry = entryMap(value);
+        const QString path = entry.value(QStringLiteral("path")).toString();
+        if (path.isEmpty() || path == QLatin1String("/")) {
+            continue;
+        }
+        entriesByPath.insert(path, entry);
+        QString parent;
+        QString remainder = path;
+        while (true) {
+            const int slash = remainder.lastIndexOf(QLatin1Char('/'));
+            if (slash < 0) {
+                parent.clear();
+            } else {
+                parent = remainder.left(slash);
+            }
+            const QString child = remainder.sliced(slash + 1);
+            if (!child.isEmpty()) {
+                const bool childIsFolder = remainder != path
+                    || entry.value(QStringLiteral("folder")).toBool();
+                childrenByPath[parent].insert(child, childIsFolder);
+            }
+            if (slash < 0) {
+                break;
+            }
+            remainder.truncate(slash);
+        }
+    }
+    QHash<QString, QList<QPair<QString, bool>>> indexedChildren;
+    for (auto parent = childrenByPath.cbegin(); parent != childrenByPath.cend(); ++parent) {
+        QList<QPair<QString, bool>> children;
+        for (auto child = parent.value().cbegin(); child != parent.value().cend(); ++child) {
+            children.append({child.key(), child.value()});
+        }
+        indexedChildren.insert(parent.key(), children);
+    }
+    {
+        QMutexLocker locker(&fs->snapshotMutex);
+        fs->entrySnapshot = entries;
+        fs->entriesByPath = std::move(entriesByPath);
+        fs->childrenByPath = std::move(indexedChildren);
+        fs->entrySnapshotTimestampMs = now;
+        fs->entrySnapshotValid = true;
+        return fs->entrySnapshot;
+    }
 }
 
 /** Converts one D-Bus a{sv} record into a map usable by the FUSE tree. */
@@ -137,26 +219,20 @@ QVariantMap entryMap(const QVariant &value)
     return result;
 }
 
-/** Finds one file or folder metadata record in an already fetched snapshot. */
-QVariantMap findEntryIn(const QVariantList &entries, const QString &relative)
+/** Looks up metadata in the indexed snapshot without scanning every object. */
+QVariantMap findIndexedEntry(const QString &relative)
 {
-    for (const QVariant &value : entries) {
-        const QVariantMap entry = entryMap(value);
-        if (entry.value(QStringLiteral("path")).toString() == relative) {
-            return entry;
-        }
+    auto *fs = context();
+    QMutexLocker locker(&fs->snapshotMutex);
+    const auto it = fs->entriesByPath.constFind(relative);
+    if (it != fs->entriesByPath.cend()) {
+        return it.value();
     }
-    // Some persisted baselines contain files below a folder but no separate
-    // record for that intermediate folder. Synthesize its directory metadata
-    // so traversal remains valid after a restart.
-    const QString descendantPrefix = relative + QLatin1Char('/');
-    for (const QVariant &value : entries) {
-        const QVariantMap entry = entryMap(value);
-        if (entry.value(QStringLiteral("path")).toString().startsWith(descendantPrefix)) {
-            return {{QStringLiteral("path"), relative},
-                    {QStringLiteral("folder"), true},
-                    {QStringLiteral("size"), 0LL}};
-        }
+    const auto children = fs->childrenByPath.constFind(relative);
+    if (children != fs->childrenByPath.cend()) {
+        return {{QStringLiteral("path"), relative},
+                {QStringLiteral("folder"), true},
+                {QStringLiteral("size"), 0LL}};
     }
     return {};
 }
@@ -164,37 +240,23 @@ QVariantMap findEntryIn(const QVariantList &entries, const QString &relative)
 /** Fetches the service snapshot and finds one remote entry. */
 QVariantMap findEntry(const QString &relative)
 {
-    return findEntryIn(remoteEntries(), relative);
+    remoteEntries();
+    return findIndexedEntry(relative);
 }
 
 /** Returns immediate children so FUSE can expose a stable remote directory. */
 QList<QPair<QString, bool>> childrenOf(const QVariantList &entries, const QString &parent)
 {
-    QMap<QString, bool> children;
-    const QString prefix = parent.isEmpty() ? QString() : parent + QLatin1Char('/');
-    for (const QVariant &value : entries) {
-        const QVariantMap entry = entryMap(value);
-        const QString path = entry.value(QStringLiteral("path")).toString();
-        if (!path.startsWith(prefix)) {
-            continue;
-        }
-        const QString remainder = path.sliced(prefix.size());
-        // Graph also returns a synthetic root item with an empty path; it is
-        // represented by the FUSE mount itself and must not become an empty
-        // directory entry.
-        if (remainder.isEmpty()) {
-            continue;
-        }
-        const int slash = remainder.indexOf(QLatin1Char('/'));
-        if (slash < 0) {
-            children.insert(remainder, entry.value(QStringLiteral("folder")).toBool());
-        } else {
-            children.insert(remainder.left(slash), true);
-        }
-    }
+    Q_UNUSED(entries)
+    remoteEntries();
     QList<QPair<QString, bool>> result;
-    for (auto it = children.cbegin(); it != children.cend(); ++it) {
-        result.append({it.key(), it.value()});
+    {
+        auto *fs = context();
+        QMutexLocker locker(&fs->snapshotMutex);
+        const auto indexed = fs->childrenByPath.constFind(parent);
+        if (indexed != fs->childrenByPath.cend()) {
+            result = indexed.value();
+        }
     }
     // Include files created in the private cache before Graph has assigned
     // them an item ID. This keeps a newly written FUSE file visible during
@@ -213,7 +275,14 @@ QList<QPair<QString, bool>> childrenOf(const QVariantList &entries, const QStrin
             || name.startsWith(QStringLiteral(".~"))) {
             continue;
         }
-        if (children.contains(child.fileName())) {
+        bool alreadyPresent = false;
+        for (const auto &remoteChild : result) {
+            if (remoteChild.first == child.fileName()) {
+                alreadyPresent = true;
+                break;
+            }
+        }
+        if (alreadyPresent) {
             continue;
         }
         result.append({name, child.isDir()});
@@ -274,7 +343,7 @@ int requestMaterialization(const QString &relative, qint64 expectedSize)
 {
     // The service may discover that a legacy zero-byte entry is a folder while
     // handling this request. Do not keep using the pre-request FUSE snapshot.
-    context()->entrySnapshotValid = false;
+    invalidateEntrySnapshot();
     const QDBusMessage reply = serviceInterface().call(
         QStringLiteral("materializeFile"), context()->profile, relative);
     if (reply.type() == QDBusMessage::ErrorMessage) {
@@ -356,7 +425,7 @@ int fsReaddir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t,
     // request hundreds of child attributes while opening a folder; issuing a
     // synchronous D-Bus call for every child made the UI appear frozen.
     const QVariantList entries = remoteEntries();
-    const QVariantMap directoryEntry = findEntryIn(entries, relative);
+    const QVariantMap directoryEntry = findIndexedEntry(relative);
     if (!relative.isEmpty() && !directoryEntry.value(QStringLiteral("folder")).toBool()
         && !QFileInfo(localPath(relative)).isDir()) {
         qWarning().noquote() << "DriveBeacon FUSE: readdir requested for non-directory" << relative;
@@ -372,7 +441,7 @@ int fsReaddir(const char *path, void *buffer, fuse_fill_dir_t filler, off_t,
         const QString childPath = relative.isEmpty()
             ? name : relative + QLatin1Char('/') + name;
         struct stat childStat{};
-        const bool hasMetadata = statFromEntry(childPath, findEntryIn(entries, childPath), &childStat);
+        const bool hasMetadata = statFromEntry(childPath, findIndexedEntry(childPath), &childStat);
         const QByteArray encodedName = name.toUtf8();
         qInfo().noquote() << "DriveBeacon FUSE: readdir entry" << childPath
                           << "metadata" << hasMetadata;
@@ -420,7 +489,7 @@ int fsOpen(const char *path, struct fuse_file_info *info)
         if (info->flags & O_TRUNC) {
             QFile::remove(cachedPath);
         } else if (!QFileInfo(cachedPath).isFile()
-                   || (context()->entrySnapshotValid
+                   || (hasEntrySnapshot()
                        && findEntry(relative).value(QStringLiteral("placeholder")).toBool())) {
             const int result = requestMaterialization(
                 relative, entry.value(QStringLiteral("size")).toLongLong());
@@ -637,6 +706,22 @@ int fsRelease(const char *, struct fuse_file_info *info)
     info->fh = 0;
     return result;
 }
+
+/** Enables short-lived kernel caching for stable metadata and directory reads. */
+void *fsInit(struct fuse_conn_info *, struct fuse_config *config)
+{
+    config->attr_timeout = 1.0;
+    config->entry_timeout = 1.0;
+    config->negative_timeout = 1.0;
+    return nullptr;
+}
+
+/** Lets the kernel reuse a completed directory enumeration briefly. */
+int fsOpenDir(const char *, struct fuse_file_info *info)
+{
+    info->cache_readdir = 1;
+    return 0;
+}
 }
 
 int main(int argc, char **argv)
@@ -652,16 +737,13 @@ int main(int argc, char **argv)
     if (profile.isEmpty() || backingDirectory.isEmpty() || parser.positionalArguments().isEmpty()) {
         parser.showHelp(2);
     }
-    FileSystemContext fs{profile, QDir::cleanPath(backingDirectory),
-                         QDBusInterface(QString::fromLatin1(serviceName),
-                                        QString::fromLatin1(objectPath),
-                                        QString::fromLatin1(interfaceName),
-                                        QDBusConnection::sessionBus()),
-                         {}, 0, false};
+    FileSystemContext fs(profile, QDir::cleanPath(backingDirectory));
     if (!fs.service.isValid()) {
         return 1;
     }
     struct fuse_operations operations{};
+    operations.init = fsInit;
+    operations.opendir = fsOpenDir;
     operations.getattr = fsGetattr;
     operations.statfs = fsStatfs;
     operations.readdir = fsReaddir;
