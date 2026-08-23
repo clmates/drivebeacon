@@ -2127,10 +2127,12 @@ void GraphClient::processDownloadedReply(QNetworkReply *reply,
 
 void GraphClient::scanLocalChanges()
 {
-    if (m_renameInProgress || m_remoteEnumerationInProgress || m_syncDirectory.isEmpty()) {
+    if (m_renameInProgress || m_remoteEnumerationInProgress || !m_activeDownloads.isEmpty()
+        || !m_pendingFiles.isEmpty() || m_syncDirectory.isEmpty()) {
         // The cache is populated while the remote tree is being enumerated.
-        // Scanning it before the remote folder index is complete would mistake
-        // those intermediate directories for user-created local folders.
+        // Scanning it before the remote tree and its downloads are complete
+        // would mistake old visible files for user changes while their remote
+        // replacements are still being written.
         return;
     }
     // Scanning must continue while transfers are active: a newly copied small
