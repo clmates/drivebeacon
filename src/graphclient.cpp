@@ -623,6 +623,9 @@ void GraphClient::startRemoteMonitoring(const QString &driveId, const QString &a
     m_remoteTimer.start();
     m_uploadTimer.start();
     m_cacheTimer.start();
+    // Establish a safe local baseline before resumed delta work can reach the
+    // remote mutation scheduler.
+    scanLocalChanges();
     // A pause can occur while a page still has queued work. Re-enable the
     // schedulers so that resuming continues that page before polling again.
     startPendingDownloads();
@@ -831,7 +834,10 @@ void GraphClient::initializeLocalMonitoring(const QStringList &signatures,
                                             const QStringList &remotePaths,
                                             const QString &localDirectory)
 {
-    m_bootstrapBaseline = signatures.isEmpty() || remotePaths.isEmpty();
+    // Rebuild the local observation baseline before resuming delta monitoring.
+    // Persisted state may be non-empty but still reflect an interrupted or
+    // previously unsafe recovery, so it cannot authorize uploads on startup.
+    m_bootstrapBaseline = true;
     m_syncDirectory = QDir::cleanPath(QFileInfo(localDirectory).absoluteFilePath());
     m_localSignatures.clear();
     m_localMetadata.clear();
@@ -1487,6 +1493,10 @@ void GraphClient::synchronize(const QString &driveId, const QString &accessToken
     m_syncDriveId = driveId;
     m_syncToken = accessToken;
     m_remoteEnumerationInProgress = true;
+    // A full enumeration rebuilds the remote index. Do not let the existing
+    // local cache generate mutations until that index and its downloads are
+    // complete, even when an old persisted baseline is non-empty.
+    m_bootstrapBaseline = true;
     // A forced resync stops polling first to prevent local uploads from
     // racing the remote pull; the remote transfer scheduler must be enabled
     // again for the queued files to actually download.
@@ -1815,7 +1825,6 @@ void GraphClient::processNextFile()
         Q_EMIT syncProgress(100, {});
         Q_EMIT syncFinished();
         Q_EMIT localStateChanged(localSignatures(), remotePaths());
-        m_bootstrapBaseline = false;
         if (m_monitoringEnabled && !m_uploadTimer.isActive()) {
             scanLocalChanges();
             m_uploadTimer.start();
@@ -2182,6 +2191,23 @@ void GraphClient::scanLocalChanges()
             queueLocalHash(relativePath, localPath, metadata);
         }
     }
+    if (m_bootstrapBaseline) {
+        // Once all stable local hashes are available, make the cache the new
+        // baseline. This deliberately ignores local additions during a full
+        // recovery pass; uploading them can be enabled by a later scan after
+        // the remote tree has been reconciled.
+        if (!m_hashingPaths.isEmpty() || currentSignatures.size() < currentPaths.size()) {
+            return;
+        }
+        for (auto it = currentSignatures.cbegin(); it != currentSignatures.cend(); ++it) {
+            m_localSignatures.insert(it.key(), it.value());
+            const QFileInfo fileInfo(safeLocalPath(it.key()));
+            m_localMetadata.insert(it.key(), {fileInfo.size(), fileInfo.lastModified()});
+        }
+        m_bootstrapBaseline = false;
+        Q_EMIT localStateChanged(localSignatures(), remotePaths());
+        return;
+    }
     QSet<QString> currentFolders;
     QDirIterator folderIterator(m_syncDirectory, QDir::Dirs | QDir::NoDotAndDotDot,
                                 QDirIterator::Subdirectories);
@@ -2316,9 +2342,11 @@ void GraphClient::finishLocalHash(const QString &relativePath,
 
 void GraphClient::processPendingLocalOperations()
 {
-    if (!m_monitoringEnabled) {
+    if (!m_monitoringEnabled || m_bootstrapBaseline) {
         // Pausing must stop the mutation chain after the current network
-        // callback; keep queued work so resume can continue it safely.
+        // callback; keep queued work so resume can continue it safely. During
+        // baseline bootstrap, local files are observations rather than upload
+        // candidates until their stable signatures have been adopted.
         return;
     }
     if (m_folderCreateInProgress || !m_pendingRemoteFolders.isEmpty()) {
