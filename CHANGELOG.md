@@ -8,6 +8,12 @@ version is tagged.
 
 No changes yet.
 
+## [1.0.16] — 2026-08-23
+
+- Added a maintained release changelog covering the project history.
+- Documented the release workflow requiring changelog, About, and AppStream
+  metadata updates before tagging a version.
+
 ## [1.0.15] — 2026-08-23
 
 - Improved the FUSE metadata path used by Dolphin.

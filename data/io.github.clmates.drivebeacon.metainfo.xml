@@ -30,6 +30,11 @@
   <url type="homepage">https://github.com/clmates/drivebeacon</url>
   <url type="bugtracker">https://github.com/clmates/drivebeacon/issues</url>
   <releases>
+    <release version="1.0.16" date="2026-08-23">
+      <description>
+        <p>Add a maintained release changelog and document the release workflow.</p>
+      </description>
+    </release>
     <release version="1.0.15" date="2026-08-23">
       <description>
         <p>Improve FUSE metadata handling and persist adopted remote folders.</p>
