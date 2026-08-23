@@ -12,6 +12,13 @@ The source code is the primary source of truth. Keep Markdown documents at a hig
 
 Document code as part of every code change. Add concise comments or Doxygen documentation for new or modified classes, structs, enums, properties, signals, and functions, including private helpers when their purpose is not immediately obvious. Comments should explain responsibilities, data flow, invariants, security constraints, lifecycle decisions, and non-obvious tradeoffs; do not restate syntax or implementation line by line. Keep comments next to the declarations or logic they describe, update stale comments when behavior changes, and add structural comments in QML when they clarify the relationship between UI sections and backend properties.
 
+Maintain `CHANGELOG.md` as the user-facing summary of released behavior. Before
+creating a release tag, review the commits since the previous tag, move the
+relevant entries from `Unreleased` into a dated version section, and describe
+changes by user-visible behavior rather than commit titles. The changelog must be
+included in the release commit and remain consistent with the About and AppStream
+metadata.
+
 ## Destructive Action Safety
 
 Never perform a destructive action without the user's explicit prior authorization. Before requesting authorization, identify the exact targets and explain the concrete risks, affected data or services, expected impact, and whether recovery is possible. Approval must apply to the specific action described; do not treat general or earlier consent as authorization for a different destructive operation. Prefer reversible alternatives whenever available.
